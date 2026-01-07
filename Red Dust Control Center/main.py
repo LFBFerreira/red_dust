@@ -8,7 +8,7 @@ from ui.main_window import MainWindow
 
 # Configure logging before importing modules
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Temporarily set to DEBUG to see HTML samples
     format='[%(levelname)s] %(message)s'
 )
 

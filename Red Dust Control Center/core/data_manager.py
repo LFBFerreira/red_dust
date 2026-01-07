@@ -2,8 +2,9 @@
 Data Manager for fetching and caching InSight SEIS data from PDS archive.
 """
 import re
+import json
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from urllib.parse import urlparse
 import requests
 from obspy import Stream, UTCDateTime, read
@@ -27,6 +28,8 @@ class DataManager:
         """
         self.cache_root = Path(cache_root)
         self.cache_root.mkdir(parents=True, exist_ok=True)
+        self.metadata_cache_path = self.cache_root / "metadata.json"
+        self._metadata_cache: Dict = self._load_metadata_cache()
     
     def build_pds_url(self, network: str, station: str, year: int, doy: int, 
                      data_type: str = "continuous_waveform") -> str:
@@ -135,6 +138,234 @@ class DataManager:
         except requests.RequestException as e:
             logger.error(f"Failed to fetch directory listing from {url}: {e}")
             return []
+    
+    def fetch_directory_names(self, url: str, filter_years: bool = False) -> List[str]:
+        """
+        Fetch directory listing from PDS archive and extract directory names.
+        
+        Args:
+            url: PDS directory URL
+            filter_years: If True, exclude 4-digit numbers (years) - use when fetching days
+        
+        Returns:
+            List of directory names (years or days of year)
+        """
+        try:
+            logger.debug(f"Fetching directory listing from: {url}")
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            logger.debug(f"Response status: {response.status_code}, Content length: {len(response.text)}")
+            
+            # Parse HTML to find directory links (typically end with /)
+            directory_names = []
+            base_url = url if url.endswith('/') else url + '/'
+            
+            # Multiple patterns to match different HTML structures
+            # Apache directory listings can vary in format
+            patterns = [
+                # Pattern 1: href="dirname/" or href='dirname/'
+                r'href=["\']([^"\']+/)"',
+                # Pattern 2: href=dirname/ (no quotes)
+                r'href=([^\s>]+/)',
+                # Pattern 3: <a> tag with href ending in /
+                r'<a[^>]+href=["\']?([^"\'>\s]+/)',
+                # Pattern 4: Look for links that are just numbers (more flexible)
+                r'href=["\']?(\d+)/?["\']?',
+                # Pattern 5: Directory entries in table format
+                r'<a[^>]*href=["\']?([^"\'>\s]*(\d+)[^"\'>\s]*/?)["\']?',
+            ]
+            
+            for pattern in patterns:
+                matches = re.findall(pattern, response.text, re.IGNORECASE)
+                for match in matches:
+                    # Handle tuple matches (from pattern 5)
+                    if isinstance(match, tuple):
+                        match = match[0] if match[0] else match[1]
+                    
+                    # Clean up the match
+                    dirname = match.strip('"\'/')
+                    
+                    # Skip parent directory and empty names
+                    if dirname in ['..', '.', ''] or dirname.startswith('../'):
+                        continue
+                    # Skip if it's a full URL
+                    if dirname.startswith('http'):
+                        continue
+                    # Extract just the numeric part if there's extra text
+                    # Some links might be like "2018/" or "2018" or "data/2018/"
+                    numeric_match = re.search(r'(\d+)', dirname)
+                    if numeric_match:
+                        dirname = numeric_match.group(1)
+                    
+                    # Should be numeric (year or day of year)
+                    if dirname.isdigit():
+                        # Filter out years (4-digit numbers) when fetching days
+                        if filter_years and len(dirname) == 4:
+                            continue
+                        directory_names.append(dirname)
+                
+                if directory_names:
+                    break
+            
+            # If still no matches, try a more aggressive approach
+            if not directory_names:
+                # Look for any 4-digit numbers (years) or 1-3 digit numbers (days)
+                # in href attributes
+                all_hrefs = re.findall(r'href=["\']?([^"\'>\s]+)["\'>\s]', response.text, re.IGNORECASE)
+                for href in all_hrefs:
+                    href = href.strip('"\'/')
+                    # Extract numeric directory names
+                    if '/' in href:
+                        parts = href.split('/')
+                        for part in parts:
+                            if part.isdigit():
+                                # Filter out years when fetching days
+                                if filter_years and len(part) == 4:
+                                    continue
+                                if part not in directory_names:
+                                    directory_names.append(part)
+                    elif href.isdigit():
+                        # Filter out years when fetching days
+                        if filter_years and len(href) == 4:
+                            continue
+                        if href not in directory_names:
+                            directory_names.append(href)
+            
+            # Remove duplicates and sort
+            unique_dirs = sorted(set(directory_names), key=lambda x: int(x))
+            
+            if not unique_dirs:
+                # Debug: log a sample of the HTML to see what we're dealing with
+                logger.debug(f"No directories found. HTML sample (first 2000 chars):\n{response.text[:2000]}")
+            
+            return unique_dirs
+            
+        except requests.RequestException as e:
+            logger.error(f"Failed to fetch directory listing from {url}: {e}")
+            return []
+    
+    def _load_metadata_cache(self) -> Dict:
+        """Load metadata cache from disk."""
+        if self.metadata_cache_path.exists():
+            try:
+                with open(self.metadata_cache_path, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Failed to load metadata cache: {e}")
+        return {}
+    
+    def _save_metadata_cache(self) -> None:
+        """Save metadata cache to disk."""
+        try:
+            with open(self.metadata_cache_path, 'w') as f:
+                json.dump(self._metadata_cache, f, indent=2)
+        except IOError as e:
+            logger.error(f"Failed to save metadata cache: {e}")
+    
+    def get_available_years(self, network: str, station: str, 
+                           data_type: str = "continuous_waveform",
+                           use_cache: bool = True) -> List[int]:
+        """
+        Get available years for a station.
+        
+        Args:
+            network: Network code
+            station: Station code
+            data_type: Type of data
+            use_cache: Whether to use cached data if available
+        
+        Returns:
+            List of available years (sorted)
+        """
+        cache_key = f"{network.lower()}/{station.lower()}/years"
+        
+        # Check cache first
+        if use_cache and cache_key in self._metadata_cache:
+            cached_years = self._metadata_cache[cache_key]
+            logger.info(f"Using cached years for {network}/{station}: {len(cached_years)} years found")
+            return [int(y) for y in cached_years]
+        
+        # Fetch from PDS
+        network_lower = network.lower()
+        station_lower = station.lower()
+        url = f"{PDS_BASE_URL}{network_lower}/{data_type}/{station_lower}/"
+        
+        logger.info(f"Fetching available years from PDS for {network}/{station}...")
+        year_strings = self.fetch_directory_names(url)
+        years = [int(y) for y in year_strings]
+        
+        # Cache the result
+        self._metadata_cache[cache_key] = year_strings
+        self._save_metadata_cache()
+        
+        logger.info(f"Found {len(years)} available years for {network}/{station}: {years[:5]}{'...' if len(years) > 5 else ''}")
+        return years
+    
+    def get_available_days(self, network: str, station: str, year: int,
+                          data_type: str = "continuous_waveform",
+                          use_cache: bool = True) -> List[int]:
+        """
+        Get available days of year for a station and year.
+        
+        Args:
+            network: Network code
+            station: Station code
+            year: Year
+            data_type: Type of data
+            use_cache: Whether to use cached data if available
+        
+        Returns:
+            List of available days of year (sorted)
+        """
+        cache_key = f"{network.lower()}/{station.lower()}/{year}/days"
+        
+        # Check cache first
+        if use_cache and cache_key in self._metadata_cache:
+            cached_days = self._metadata_cache[cache_key]
+            logger.info(f"Using cached days for {network}/{station}/{year}: {len(cached_days)} days found")
+            return [int(d) for d in cached_days]
+        
+        # Fetch from PDS
+        network_lower = network.lower()
+        station_lower = station.lower()
+        url = f"{PDS_BASE_URL}{network_lower}/{data_type}/{station_lower}/{year}/"
+        
+        logger.info(f"Fetching available days from PDS for {network}/{station}/{year}...")
+        day_strings = self.fetch_directory_names(url, filter_years=True)
+        days = [int(d) for d in day_strings]
+        
+        # Cache the result
+        self._metadata_cache[cache_key] = day_strings
+        self._save_metadata_cache()
+        
+        logger.info(f"Found {len(days)} available days for {network}/{station}/{year}")
+        return days
+    
+    def refresh_metadata_cache(self, network: str, station: str,
+                              data_type: str = "continuous_waveform") -> None:
+        """
+        Refresh metadata cache for a station by fetching from PDS.
+        
+        Args:
+            network: Network code
+            station: Station code
+            data_type: Type of data
+        """
+        logger.info(f"Refreshing metadata cache for {network}/{station}...")
+        # Fetch years (this will also cache them)
+        logger.info("Step 1/2: Fetching available years...")
+        years = self.get_available_years(network, station, data_type, use_cache=False)
+        logger.info(f"Step 1/2 complete: Found {len(years)} years")
+        
+        # Fetch days for each year
+        logger.info(f"Step 2/2: Fetching available days for {len(years)} years...")
+        total_days = 0
+        for i, year in enumerate(years, 1):
+            days = self.get_available_days(network, station, year, data_type, use_cache=False)
+            total_days += len(days)
+            logger.info(f"  Year {year}: {len(days)} days ({i}/{len(years)})")
+        
+        logger.info(f"Metadata cache refresh complete for {network}/{station}: {len(years)} years, {total_days} total days")
     
     def get_cache_path(self, network: str, station: str, year: int, doy: int,
                       data_type: str = "continuous_waveform") -> Path:

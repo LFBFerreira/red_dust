@@ -12,16 +12,16 @@ if _project_root_str not in sys.path:
     sys.path.insert(0, _project_root_str)
 
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                               QComboBox, QDateEdit, QPushButton, QProgressBar)
-from PySide6.QtCore import Qt, QDate, Signal
-from datetime import datetime
+                               QComboBox, QPushButton, QProgressBar)
+from PySide6.QtCore import Qt, Signal
 import logging
 from settings import (
     DEFAULT_STATION, 
     DEFAULT_NETWORK, 
-    AVAILABLE_STATIONS
+    AVAILABLE_STATIONS,
+    DEFAULT_YEAR,
+    DEFAULT_DAY_OF_YEAR
 )
-from utils import get_default_date
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +32,18 @@ class DataPicker(QWidget):
     # Signal emitted when user clicks "Load Data"
     load_requested = Signal(dict)  # Emits: {"network": str, "station": str, "year": int, "doy": int}
     
-    def __init__(self, parent=None):
-        """Initialize DataPicker."""
+    def __init__(self, parent=None, data_manager=None):
+        """
+        Initialize DataPicker.
+        
+        Args:
+            parent: Parent widget
+            data_manager: DataManager instance for fetching available dates
+        """
         super().__init__(parent)
+        self.data_manager = data_manager
+        self._available_years: list[int] = []
+        self._available_days: list[int] = []
         self._setup_ui()
     
     def _setup_ui(self):
@@ -60,22 +69,27 @@ class DataPicker(QWidget):
         default_station_index = AVAILABLE_STATIONS.index(DEFAULT_STATION)
         if default_station_index >= 0:
             self.station_combo.setCurrentIndex(default_station_index)
+        self.station_combo.currentTextChanged.connect(self._on_station_changed)
         station_layout.addWidget(self.station_combo)
         station_layout.addStretch()
         layout.addLayout(station_layout)
         
-        # Date picker
-        date_layout = QHBoxLayout()
-        date_layout.addWidget(QLabel("Date:"))
-        self.date_picker = QDateEdit()
-        self.date_picker.setCalendarPopup(True)
-        # Set default date from settings
-        default_date = get_default_date()
-        self.date_picker.setDate(QDate(default_date.year, default_date.month, default_date.day))
-        self.date_picker.setDisplayFormat("yyyy-MM-dd")
-        date_layout.addWidget(self.date_picker)
-        date_layout.addStretch()
-        layout.addLayout(date_layout)
+        # Year selection
+        year_layout = QHBoxLayout()
+        year_layout.addWidget(QLabel("Year:"))
+        self.year_combo = QComboBox()
+        self.year_combo.currentTextChanged.connect(self._on_year_changed)
+        year_layout.addWidget(self.year_combo)
+        year_layout.addStretch()
+        layout.addLayout(year_layout)
+        
+        # Day of year selection
+        day_layout = QHBoxLayout()
+        day_layout.addWidget(QLabel("Day of Year:"))
+        self.day_combo = QComboBox()
+        day_layout.addWidget(self.day_combo)
+        day_layout.addStretch()
+        layout.addLayout(day_layout)
         
         # Load button
         self.load_button = QPushButton("Load Data")
@@ -97,20 +111,94 @@ class DataPicker(QWidget):
         layout.addStretch()
         self.setLayout(layout)
     
-    def date_to_doy(self, date: QDate) -> tuple[int, int]:
+    def set_data_manager(self, data_manager) -> None:
         """
-        Convert QDate to (year, day_of_year).
+        Set the data manager and load initial data.
         
         Args:
-            date: QDate object
-        
-        Returns:
-            Tuple of (year, day_of_year)
+            data_manager: DataManager instance
         """
-        python_date = date.toPython()
-        year = python_date.year
-        doy = python_date.timetuple().tm_yday
-        return (year, doy)
+        self.data_manager = data_manager
+        if data_manager:
+            self._load_available_years()
+    
+    def _load_available_years(self) -> None:
+        """Load available years for the current station."""
+        if not self.data_manager:
+            logger.warning("DataManager not set, cannot load available years")
+            return
+        
+        network = self.network_combo.currentText()
+        station = self.station_combo.currentText()
+        
+        logger.info(f"Loading available years for {network}/{station}...")
+        try:
+            years = self.data_manager.get_available_years(network, station)
+            self._available_years = years
+            
+            # Update year combo box
+            self.year_combo.clear()
+            if years:
+                logger.info(f"Found {len(years)} available years: {years[:5]}{'...' if len(years) > 5 else ''}")
+                self.year_combo.addItems([str(y) for y in years])
+                # Set default year if available
+                if DEFAULT_YEAR in years:
+                    index = years.index(DEFAULT_YEAR)
+                    self.year_combo.setCurrentIndex(index)
+                    logger.info(f"Set default year to {DEFAULT_YEAR}")
+                else:
+                    self.year_combo.setCurrentIndex(0)
+                    logger.info(f"Set year to first available: {years[0]}")
+                # Trigger year change to load days
+                self._on_year_changed()
+            else:
+                logger.warning(f"No years found for {network}/{station}")
+        except Exception as e:
+            logger.error(f"Failed to load available years: {e}", exc_info=True)
+    
+    def _on_station_changed(self, station: str) -> None:
+        """Handle station selection change."""
+        logger.debug(f"Station changed to: {station}")
+        self._load_available_years()
+    
+    def _on_year_changed(self, year_str: str = None) -> None:
+        """Handle year selection change."""
+        if not year_str:
+            year_str = self.year_combo.currentText()
+        
+        if not year_str or not self.data_manager:
+            if not year_str:
+                logger.debug("No year selected")
+            if not self.data_manager:
+                logger.warning("DataManager not set, cannot load available days")
+            return
+        
+        try:
+            year = int(year_str)
+            network = self.network_combo.currentText()
+            station = self.station_combo.currentText()
+            
+            logger.info(f"Loading available days for {network}/{station}/{year}...")
+            days = self.data_manager.get_available_days(network, station, year)
+            self._available_days = days
+            
+            # Update day combo box
+            self.day_combo.clear()
+            if days:
+                logger.info(f"Found {len(days)} available days for {year}")
+                self.day_combo.addItems([str(d) for d in days])
+                # Set default day if available
+                if DEFAULT_DAY_OF_YEAR in days:
+                    index = days.index(DEFAULT_DAY_OF_YEAR)
+                    self.day_combo.setCurrentIndex(index)
+                    logger.info(f"Set default day to {DEFAULT_DAY_OF_YEAR}")
+                else:
+                    self.day_combo.setCurrentIndex(0)
+                    logger.info(f"Set day to first available: {days[0]}")
+            else:
+                logger.warning(f"No days found for {network}/{station}/{year}")
+        except (ValueError, Exception) as e:
+            logger.error(f"Failed to load available days: {e}", exc_info=True)
     
     def get_selection(self) -> dict:
         """
@@ -121,7 +209,14 @@ class DataPicker(QWidget):
         """
         network = self.network_combo.currentText()
         station = self.station_combo.currentText()
-        year, doy = self.date_to_doy(self.date_picker.date())
+        
+        try:
+            year = int(self.year_combo.currentText())
+            doy = int(self.day_combo.currentText())
+        except (ValueError, AttributeError):
+            # Fallback to defaults if combo boxes are empty
+            year = DEFAULT_YEAR
+            doy = DEFAULT_DAY_OF_YEAR
         
         return {
             "network": network,

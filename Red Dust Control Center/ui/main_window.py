@@ -82,6 +82,13 @@ class MainWindow(QMainWindow):
         self._setup_logging()
         self._connect_signals()
         
+        # Load cached metadata immediately (for fast UI response)
+        logger.info("Loading cached metadata...")
+        self.data_picker._load_available_years()
+        
+        # Refresh metadata in background
+        self._load_metadata_async()
+        
         logger.info("Red Dust Control Center initialized")
     
     def _setup_ui(self):
@@ -127,7 +134,7 @@ class MainWindow(QMainWindow):
         row2_splitter = QSplitter(Qt.Orientation.Horizontal)
         
         # Data picker
-        self.data_picker = DataPicker()
+        self.data_picker = DataPicker(data_manager=self.data_manager)
         row2_splitter.addWidget(self.data_picker)
         
         # Playback controls
@@ -358,4 +365,48 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
                 self.waveform_viewer.update_waveform(stream, channel)
             self._update_metadata()
             logger.info(f"Active channel changed to: {channel}")
+    
+    def _load_metadata_async(self):
+        """Load metadata (available years/days) in background."""
+        from settings import DEFAULT_NETWORK, DEFAULT_STATION
+        
+        class MetadataLoadThread(QThread):
+            metadata_loaded = Signal()
+            
+            def __init__(self, data_manager, network, station):
+                super().__init__()
+                self.data_manager = data_manager
+                self.network = network
+                self.station = station
+            
+            def run(self):
+                try:
+                    logger.info(f"Starting background metadata refresh for {self.network}/{self.station}...")
+                    self.data_manager.refresh_metadata_cache(
+                        self.network, 
+                        self.station
+                    )
+                    logger.info("Background metadata refresh completed successfully")
+                    self.metadata_loaded.emit()
+                except Exception as e:
+                    logger.error(f"Failed to refresh metadata in background: {e}", exc_info=True)
+                    self.metadata_loaded.emit()  # Still emit to update UI with cached data
+        
+        # Start metadata loading thread
+        logger.info("Starting background thread to refresh metadata from PDS...")
+        self.metadata_thread = MetadataLoadThread(
+            self.data_manager,
+            DEFAULT_NETWORK,
+            DEFAULT_STATION
+        )
+        def on_metadata_loaded():
+            logger.info("Metadata refresh complete, updating UI...")
+            if self.data_picker and self.data_picker.data_manager:
+                self.data_picker._load_available_years()
+            else:
+                logger.warning("Cannot update UI: DataPicker or DataManager not available")
+        
+        self.metadata_thread.metadata_loaded.connect(on_metadata_loaded)
+        self.metadata_thread.start()
+        logger.info("Background metadata refresh thread started")
 
