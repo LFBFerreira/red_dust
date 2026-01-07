@@ -1,0 +1,123 @@
+"""
+Data Picker widget for selecting seismic datasets.
+"""
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+                               QComboBox, QDateEdit, QPushButton, QProgressBar)
+from PySide6.QtCore import Qt, QDate, Signal
+from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Available stations from InSight SEIS
+AVAILABLE_STATIONS = ["ELYSE", "ELYS0", "ELYHK", "ELYH0"]
+
+
+class DataPicker(QWidget):
+    """Widget for selecting and loading seismic data."""
+    
+    # Signal emitted when user clicks "Load Data"
+    load_requested = Signal(dict)  # Emits: {"network": str, "station": str, "year": int, "doy": int}
+    
+    def __init__(self, parent=None):
+        """Initialize DataPicker."""
+        super().__init__(parent)
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        """Set up the UI components."""
+        layout = QVBoxLayout()
+        
+        # Network selection
+        network_layout = QHBoxLayout()
+        network_layout.addWidget(QLabel("Network:"))
+        self.network_combo = QComboBox()
+        self.network_combo.addItem("XB")
+        self.network_combo.setEditable(False)
+        network_layout.addWidget(self.network_combo)
+        network_layout.addStretch()
+        layout.addLayout(network_layout)
+        
+        # Station selection
+        station_layout = QHBoxLayout()
+        station_layout.addWidget(QLabel("Station:"))
+        self.station_combo = QComboBox()
+        self.station_combo.addItems(AVAILABLE_STATIONS)
+        station_layout.addWidget(self.station_combo)
+        station_layout.addStretch()
+        layout.addLayout(station_layout)
+        
+        # Date picker
+        date_layout = QHBoxLayout()
+        date_layout.addWidget(QLabel("Date:"))
+        self.date_picker = QDateEdit()
+        self.date_picker.setCalendarPopup(True)
+        self.date_picker.setDate(QDate(2019, 1, 1))  # Default to early InSight data
+        self.date_picker.setDisplayFormat("yyyy-MM-dd")
+        date_layout.addWidget(self.date_picker)
+        date_layout.addStretch()
+        layout.addLayout(date_layout)
+        
+        # Load button
+        self.load_button = QPushButton("Load Data")
+        self.load_button.clicked.connect(self._on_load_clicked)
+        layout.addWidget(self.load_button)
+        
+        # Loading indicator
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        layout.addWidget(self.progress_bar)
+        
+        layout.addStretch()
+        self.setLayout(layout)
+    
+    def date_to_doy(self, date: QDate) -> tuple[int, int]:
+        """
+        Convert QDate to (year, day_of_year).
+        
+        Args:
+            date: QDate object
+        
+        Returns:
+            Tuple of (year, day_of_year)
+        """
+        python_date = date.toPython()
+        year = python_date.year
+        doy = python_date.timetuple().tm_yday
+        return (year, doy)
+    
+    def get_selection(self) -> dict:
+        """
+        Get current selection parameters.
+        
+        Returns:
+            Dictionary with network, station, year, and doy
+        """
+        network = self.network_combo.currentText()
+        station = self.station_combo.currentText()
+        year, doy = self.date_to_doy(self.date_picker.date())
+        
+        return {
+            "network": network,
+            "station": station,
+            "year": year,
+            "doy": doy
+        }
+    
+    def set_loading(self, loading: bool) -> None:
+        """
+        Set loading state.
+        
+        Args:
+            loading: True to show loading indicator
+        """
+        self.load_button.setEnabled(not loading)
+        self.progress_bar.setVisible(loading)
+    
+    def _on_load_clicked(self) -> None:
+        """Handle Load Data button click."""
+        selection = self.get_selection()
+        logger.info(f"Load requested: {selection}")
+        self.load_requested.emit(selection)
+
