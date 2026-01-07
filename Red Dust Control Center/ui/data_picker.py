@@ -1,16 +1,29 @@
 """
 Data Picker widget for selecting seismic datasets.
 """
+import sys
+from pathlib import Path
+
+# Add project root to path to allow imports from root directory
+# Only add if not already present to avoid duplicates
+_project_root = Path(__file__).parent.parent
+_project_root_str = str(_project_root)
+if _project_root_str not in sys.path:
+    sys.path.insert(0, _project_root_str)
+
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QComboBox, QDateEdit, QPushButton, QProgressBar)
 from PySide6.QtCore import Qt, QDate, Signal
 from datetime import datetime
 import logging
+from settings import (
+    DEFAULT_STATION, 
+    DEFAULT_NETWORK, 
+    AVAILABLE_STATIONS
+)
+from utils import get_default_date
 
 logger = logging.getLogger(__name__)
-
-# Available stations from InSight SEIS
-AVAILABLE_STATIONS = ["ELYSE", "ELYS0", "ELYHK", "ELYH0"]
 
 
 class DataPicker(QWidget):
@@ -32,7 +45,7 @@ class DataPicker(QWidget):
         network_layout = QHBoxLayout()
         network_layout.addWidget(QLabel("Network:"))
         self.network_combo = QComboBox()
-        self.network_combo.addItem("XB")
+        self.network_combo.addItem(DEFAULT_NETWORK)
         self.network_combo.setEditable(False)
         network_layout.addWidget(self.network_combo)
         network_layout.addStretch()
@@ -43,6 +56,10 @@ class DataPicker(QWidget):
         station_layout.addWidget(QLabel("Station:"))
         self.station_combo = QComboBox()
         self.station_combo.addItems(AVAILABLE_STATIONS)
+        # Set default station
+        default_station_index = AVAILABLE_STATIONS.index(DEFAULT_STATION)
+        if default_station_index >= 0:
+            self.station_combo.setCurrentIndex(default_station_index)
         station_layout.addWidget(self.station_combo)
         station_layout.addStretch()
         layout.addLayout(station_layout)
@@ -52,7 +69,9 @@ class DataPicker(QWidget):
         date_layout.addWidget(QLabel("Date:"))
         self.date_picker = QDateEdit()
         self.date_picker.setCalendarPopup(True)
-        self.date_picker.setDate(QDate(2019, 1, 1))  # Default to early InSight data
+        # Set default date from settings
+        default_date = get_default_date()
+        self.date_picker.setDate(QDate(default_date.year, default_date.month, default_date.day))
         self.date_picker.setDisplayFormat("yyyy-MM-dd")
         date_layout.addWidget(self.date_picker)
         date_layout.addStretch()
@@ -64,10 +83,16 @@ class DataPicker(QWidget):
         layout.addWidget(self.load_button)
         
         # Loading indicator
+        progress_layout = QVBoxLayout()
+        self.progress_label = QLabel("")
+        self.progress_label.setVisible(False)
+        progress_layout.addWidget(self.progress_label)
+        
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
-        layout.addWidget(self.progress_bar)
+        progress_layout.addWidget(self.progress_bar)
+        layout.addLayout(progress_layout)
         
         layout.addStretch()
         self.setLayout(layout)
@@ -114,10 +139,49 @@ class DataPicker(QWidget):
         """
         self.load_button.setEnabled(not loading)
         self.progress_bar.setVisible(loading)
+        self.progress_label.setVisible(loading)
+        if not loading:
+            # Reset progress bar
+            self.progress_bar.setRange(0, 0)
+            self.progress_label.setText("")
+    
+    def set_total_files(self, total: int) -> None:
+        """
+        Set the total number of files to download.
+        Switches progress bar from indeterminate to determinate mode.
+        
+        Args:
+            total: Total number of files
+        """
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(0)
+        self.progress_label.setText(f"Downloading: 0 / {total} files")
+    
+    def update_download_progress(self, downloaded: int, total: int) -> None:
+        """
+        Update download progress.
+        
+        Args:
+            downloaded: Number of files downloaded so far
+            total: Total number of files
+        """
+        self.progress_bar.setValue(downloaded)
+        self.progress_label.setText(f"Downloading: {downloaded} / {total} files")
     
     def _on_load_clicked(self) -> None:
         """Handle Load Data button click."""
         selection = self.get_selection()
         logger.info(f"Load requested: {selection}")
         self.load_requested.emit(selection)
+
+
+# Test code - only runs if file is executed directly
+if __name__ == "__main__":
+    from PySide6.QtWidgets import QApplication
+    import sys as _sys
+    
+    app = QApplication(_sys.argv)
+    widget = DataPicker()
+    widget.show()
+    _sys.exit(app.exec())
 

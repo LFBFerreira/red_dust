@@ -25,6 +25,8 @@ class DataLoadThread(QThread):
     """Thread for loading data in background."""
     data_loaded = Signal(object)  # Emits Stream
     error_occurred = Signal(str)  # Emits error message
+    file_count_known = Signal(int)  # Emits total file count when known
+    download_progress = Signal(int, int)  # Emits (downloaded, total) progress
     
     def __init__(self, data_manager, network, station, year, doy):
         super().__init__()
@@ -36,12 +38,23 @@ class DataLoadThread(QThread):
     
     def run(self):
         try:
+            # Progress callback for downloads
+            def progress_callback(downloaded: int, total: int):
+                self.download_progress.emit(downloaded, total)
+            
+            # File count callback
+            def file_count_callback(total: int):
+                self.file_count_known.emit(total)
+            
             cache_path = self.data_manager.fetch_and_cache(
-                self.network, self.station, self.year, self.doy
+                self.network, self.station, self.year, self.doy,
+                progress_callback=progress_callback,
+                file_count_callback=file_count_callback
             )
             stream = self.data_manager.load_from_cache(cache_path)
             self.data_loaded.emit(stream)
         except Exception as e:
+            logger.exception("Error in data load thread")
             self.error_occurred.emit(str(e))
 
 
@@ -198,6 +211,8 @@ class MainWindow(QMainWindow):
         )
         self.load_thread.data_loaded.connect(self._on_data_loaded)
         self.load_thread.error_occurred.connect(self._on_load_error)
+        self.load_thread.file_count_known.connect(self.data_picker.set_total_files)
+        self.load_thread.download_progress.connect(self.data_picker.update_download_progress)
         self.load_thread.start()
     
     def _on_data_loaded(self, stream):

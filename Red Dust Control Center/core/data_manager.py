@@ -4,8 +4,9 @@ Data Manager for fetching and caching InSight SEIS data from PDS archive.
 import re
 from pathlib import Path
 from typing import List, Tuple, Optional
+from urllib.parse import urlparse
 import requests
-from obspy import Stream, UTCDateTime
+from obspy import Stream, UTCDateTime, read
 import logging
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,10 @@ class DataManager:
         Returns:
             Full URL to PDS directory
         """
-        url = f"{PDS_BASE_URL}data/{network}/{data_type}/{station}/{year}/{doy:03d}/"
+        # PDS URLs use lowercase for network and station
+        network_lower = network.lower()
+        station_lower = station.lower()
+        url = f"{PDS_BASE_URL}{network_lower}/{data_type}/{station_lower}/{year}/{doy:03d}/"
         return url
     
     def fetch_directory_listing(self, url: str) -> List[str]:
@@ -61,21 +65,72 @@ class DataManager:
             
             # Parse HTML to find .mseed file links
             mseed_urls = []
-            # Look for links ending in .mseed
-            pattern = r'href="([^"]+\.mseed)"'
-            matches = re.findall(pattern, response.text)
+            base_url = url if url.endswith('/') else url + '/'
             
-            for match in matches:
-                # Handle relative and absolute URLs
-                if match.startswith('http'):
-                    mseed_urls.append(match)
-                else:
-                    # Ensure URL ends with / before appending relative path
-                    base_url = url if url.endswith('/') else url + '/'
-                    mseed_urls.append(base_url + match)
+            # Try multiple patterns to handle different HTML structures
+            patterns = [
+                # Pattern 1: href="filename.mseed" or href='filename.mseed'
+                r'href=["\']([^"\']+\.mseed)["\']',
+                # Pattern 2: href=filename.mseed (no quotes)
+                r'href=([^\s>]+\.mseed)',
+                # Pattern 3: <a> tag with href
+                r'<a[^>]+href=["\']?([^"\'>\s]+\.mseed)',
+            ]
             
-            logger.info(f"Found {len(mseed_urls)} .mseed files in directory")
-            return mseed_urls
+            for pattern in patterns:
+                matches = re.findall(pattern, response.text, re.IGNORECASE)
+                for match in matches:
+                    # Clean up the match
+                    filename = match.strip('"\'')
+                    # Skip parent directory links
+                    if filename.startswith('../') or filename == '..':
+                        continue
+                    
+                    # Build full URL
+                    if filename.startswith('http'):
+                        full_url = filename
+                    elif filename.startswith('./'):
+                        full_url = base_url + filename[2:]
+                    elif filename.startswith('/'):
+                        # Absolute path from domain root
+                        parsed = urlparse(url)
+                        full_url = f"{parsed.scheme}://{parsed.netloc}{filename}"
+                    else:
+                        full_url = base_url + filename
+                    
+                    mseed_urls.append(full_url)
+                
+                # If we found matches with this pattern, break
+                if mseed_urls:
+                    break
+            
+            # Fallback: if no href patterns worked, search for filenames directly
+            if not mseed_urls:
+                # Look for filenames ending in .mseed in the HTML
+                filename_pattern = r'([a-zA-Z0-9._-]+\.mseed)'
+                potential_files = re.findall(filename_pattern, response.text, re.IGNORECASE)
+                # Filter to only actual filenames (not parts of URLs or other text)
+                for filename in potential_files:
+                    # Skip if it looks like part of a URL path
+                    if '/' in filename or filename.startswith('.'):
+                        continue
+                    # Build URL
+                    full_url = base_url + filename
+                    if full_url not in mseed_urls:
+                        mseed_urls.append(full_url)
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_urls = []
+            for mseed_url in mseed_urls:
+                if mseed_url not in seen:
+                    seen.add(mseed_url)
+                    unique_urls.append(mseed_url)
+            
+            logger.info(f"Found {len(unique_urls)} .mseed files in directory")
+            if len(unique_urls) == 0:
+                logger.debug(f"HTML response preview (first 1000 chars): {response.text[:1000]}")
+            return unique_urls
             
         except requests.RequestException as e:
             logger.error(f"Failed to fetch directory listing from {url}: {e}")
@@ -122,21 +177,24 @@ class DataManager:
         mseed_files = list(cache_path.glob("*.mseed"))
         return len(mseed_files) > 0
     
-    def download_mseed_files(self, file_urls: List[str], cache_path: Path) -> List[Path]:
+    def download_mseed_files(self, file_urls: List[str], cache_path: Path, 
+                             progress_callback=None) -> List[Path]:
         """
         Download .mseed files to local cache.
         
         Args:
             file_urls: List of URLs to .mseed files
             cache_path: Local directory to save files
+            progress_callback: Optional callback function(current, total) for progress updates
         
         Returns:
             List of local file paths for successfully downloaded files
         """
         cache_path.mkdir(parents=True, exist_ok=True)
         downloaded_files = []
+        total_files = len(file_urls)
         
-        for url in file_urls:
+        for index, url in enumerate(file_urls, start=1):
             try:
                 # Extract filename from URL
                 filename = url.split('/')[-1]
@@ -146,6 +204,9 @@ class DataManager:
                 if local_path.exists():
                     logger.info(f"File already cached: {filename}")
                     downloaded_files.append(local_path)
+                    # Still report progress for already-cached files
+                    if progress_callback:
+                        progress_callback(len(downloaded_files), total_files)
                     continue
                 
                 # Download file
@@ -158,11 +219,20 @@ class DataManager:
                 downloaded_files.append(local_path)
                 logger.info(f"Downloaded {filename}")
                 
+                # Report progress
+                if progress_callback:
+                    progress_callback(len(downloaded_files), total_files)
+                
             except requests.RequestException as e:
                 logger.warning(f"Failed to download {url}: {e}")
-                # Continue with other files
+                # Continue with other files, but still report progress
+                if progress_callback:
+                    progress_callback(len(downloaded_files), total_files)
             except Exception as e:
                 logger.error(f"Unexpected error downloading {url}: {e}")
+                # Continue with other files, but still report progress
+                if progress_callback:
+                    progress_callback(len(downloaded_files), total_files)
         
         return downloaded_files
     
@@ -194,7 +264,7 @@ class DataManager:
             stream = Stream()
             for mseed_file in mseed_files:
                 try:
-                    trace_stream = Stream.read(str(mseed_file))
+                    trace_stream = read(str(mseed_file))
                     stream += trace_stream
                 except Exception as e:
                     logger.warning(f"Failed to parse {mseed_file.name}: {e}")
@@ -214,7 +284,8 @@ class DataManager:
             raise
     
     def fetch_and_cache(self, network: str, station: str, year: int, doy: int,
-                       data_type: str = "continuous_waveform") -> Path:
+                       data_type: str = "continuous_waveform", 
+                       progress_callback=None, file_count_callback=None) -> Path:
         """
         Fetch data from PDS and cache locally, or load from cache if available.
         
@@ -224,6 +295,8 @@ class DataManager:
             year: Year
             doy: Day of year
             data_type: Type of data
+            progress_callback: Optional callback function(current, total) for download progress
+            file_count_callback: Optional callback function(total) to report total file count
         
         Returns:
             Path to cache directory
@@ -246,8 +319,12 @@ class DataManager:
         if not file_urls:
             raise Exception(f"No .mseed files found at {url}")
         
+        # Report total file count if callback provided
+        if file_count_callback:
+            file_count_callback(len(file_urls))
+        
         # Download files
-        downloaded = self.download_mseed_files(file_urls, cache_path)
+        downloaded = self.download_mseed_files(file_urls, cache_path, progress_callback)
         
         if not downloaded:
             raise Exception(f"Failed to download any files from {url}")
