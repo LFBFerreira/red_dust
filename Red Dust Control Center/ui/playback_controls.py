@@ -32,15 +32,15 @@ class PlaybackControls(QWidget):
         # Playback buttons
         button_layout = QHBoxLayout()
         
-        self.play_button = QPushButton("▶")
+        self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.play_clicked.emit)
         button_layout.addWidget(self.play_button)
         
-        self.pause_button = QPushButton("⏸")
+        self.pause_button = QPushButton("Pause")
         self.pause_button.clicked.connect(self.pause_clicked.emit)
         button_layout.addWidget(self.pause_button)
         
-        self.stop_button = QPushButton("⏹")
+        self.stop_button = QPushButton("Stop")
         self.stop_button.clicked.connect(self.stop_clicked.emit)
         button_layout.addWidget(self.stop_button)
         
