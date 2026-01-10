@@ -50,18 +50,22 @@ class DataPicker(QWidget):
         """Set up the UI components."""
         layout = QVBoxLayout()
         
-        # Network selection
+        # Row 1: Network and Station side by side (2x2 grid - row 1)
+        row1_layout = QHBoxLayout()
+        
+        # Network selection (cell 1,1)
         network_layout = QHBoxLayout()
+        network_layout.setContentsMargins(0, 0, 0, 0)
         network_layout.addWidget(QLabel("Network:"))
         self.network_combo = QComboBox()
         self.network_combo.addItem(DEFAULT_NETWORK)
         self.network_combo.setEditable(False)
-        network_layout.addWidget(self.network_combo)
-        network_layout.addStretch()
-        layout.addLayout(network_layout)
+        network_layout.addWidget(self.network_combo, 1)  # Stretch factor to fill cell
+        row1_layout.addLayout(network_layout, 1)  # Stretch factor for equal grid cells
         
-        # Station selection
+        # Station selection (cell 1,2)
         station_layout = QHBoxLayout()
+        station_layout.setContentsMargins(0, 0, 0, 0)
         station_layout.addWidget(QLabel("Station:"))
         self.station_combo = QComboBox()
         self.station_combo.addItems(AVAILABLE_STATIONS)
@@ -70,28 +74,34 @@ class DataPicker(QWidget):
         if default_station_index >= 0:
             self.station_combo.setCurrentIndex(default_station_index)
         self.station_combo.currentTextChanged.connect(self._on_station_changed)
-        station_layout.addWidget(self.station_combo)
-        station_layout.addStretch()
-        layout.addLayout(station_layout)
+        station_layout.addWidget(self.station_combo, 1)  # Stretch factor to fill cell
+        row1_layout.addLayout(station_layout, 1)  # Stretch factor for equal grid cells
         
-        # Year selection
+        layout.addLayout(row1_layout)
+        
+        # Row 2: Year and Day of Year side by side (2x2 grid - row 2)
+        row2_layout = QHBoxLayout()
+        
+        # Year selection (cell 2,1)
         year_layout = QHBoxLayout()
+        year_layout.setContentsMargins(0, 0, 0, 0)
         year_layout.addWidget(QLabel("Year:"))
         self.year_combo = QComboBox()
         self.year_combo.currentTextChanged.connect(self._on_year_changed)
-        year_layout.addWidget(self.year_combo)
-        year_layout.addStretch()
-        layout.addLayout(year_layout)
+        year_layout.addWidget(self.year_combo, 1)  # Stretch factor to fill cell
+        row2_layout.addLayout(year_layout, 1)  # Stretch factor for equal grid cells
         
-        # Day of year selection
+        # Day of year selection (cell 2,2)
         day_layout = QHBoxLayout()
+        day_layout.setContentsMargins(0, 0, 0, 0)
         day_layout.addWidget(QLabel("Day of Year:"))
         self.day_combo = QComboBox()
-        day_layout.addWidget(self.day_combo)
-        day_layout.addStretch()
-        layout.addLayout(day_layout)
+        day_layout.addWidget(self.day_combo, 1)  # Stretch factor to fill cell
+        row2_layout.addLayout(day_layout, 1)  # Stretch factor for equal grid cells
         
-        # Load button
+        layout.addLayout(row2_layout)
+        
+        # Load button - stretches horizontally
         self.load_button = QPushButton("Load Data")
         self.load_button.clicked.connect(self._on_load_clicked)
         layout.addWidget(self.load_button)

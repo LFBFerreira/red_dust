@@ -30,12 +30,14 @@ class WaveformViewer(QWidget):
     def _setup_ui(self):
         """Set up the UI components."""
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         
-        # Title
+        # Title aligned to top left
         title = QLabel("<b>Waveform</b>")
+        title.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(title)
         
-        # PyQtGraph plot widget
+        # PyQtGraph plot widget - stretches vertically and horizontally
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setLabel('left', 'Amplitude')
         self.plot_widget.setLabel('bottom', 'Time (UTC)')
@@ -49,7 +51,7 @@ class WaveformViewer(QWidget):
         self._drag_start = None
         self._is_dragging = False
         
-        layout.addWidget(self.plot_widget)
+        layout.addWidget(self.plot_widget, 1)  # Stretch factor to fill remaining space
         self.setLayout(layout)
     
     def update_waveform(self, stream: Stream, active_channel: str = None) -> None:
@@ -81,7 +83,7 @@ class WaveformViewer(QWidget):
             channels[channel_id].append(trace)
         
         # Plot each channel
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+        active_colors = ['#00d4ff', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']  # Bright colors for active channel
         color_idx = 0
         
         for channel_id, traces in channels.items():
@@ -101,8 +103,14 @@ class WaveformViewer(QWidget):
             
             # Choose color and pen width
             is_active = (channel_id == active_channel)
-            color = colors[color_idx % len(colors)]
-            width = 3 if is_active else 1
+            if is_active:
+                # Active channel: bright color and thicker line
+                color = active_colors[color_idx % len(active_colors)]
+                width = 4
+            else:
+                # Non-active channels: muted gray color and thin line
+                color = '#666666'  # Muted gray
+                width = 1
             
             # Plot
             plot_item = self.plot_widget.plot(times, data, pen=pg.mkPen(color=color, width=width))

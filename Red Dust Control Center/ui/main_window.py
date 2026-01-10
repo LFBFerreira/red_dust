@@ -17,6 +17,7 @@ from ui.waveform_viewer import WaveformViewer
 from ui.playback_controls import PlaybackControls
 from ui.object_cards import ObjectCardsContainer
 from ui.log_viewer import LogViewer, LogHandler
+from settings import LEFT_PANEL_WIDTH
 
 logger = logging.getLogger(__name__)
 
@@ -104,21 +105,20 @@ class MainWindow(QMainWindow):
         
         # Metadata viewer
         metadata_widget = QWidget()
+        metadata_widget.setMinimumWidth(LEFT_PANEL_WIDTH)
+        metadata_widget.setMaximumWidth(LEFT_PANEL_WIDTH)
         metadata_layout = QVBoxLayout()
-        metadata_layout.addWidget(QLabel("<b>Dataset Information</b>"))
+        metadata_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Active channel selection
-        channel_layout = QHBoxLayout()
-        channel_layout.addWidget(QLabel("Active Channel:"))
-        self.channel_combo = QComboBox()
-        self.channel_combo.currentTextChanged.connect(self._on_active_channel_changed)
-        channel_layout.addWidget(self.channel_combo)
-        metadata_layout.addLayout(channel_layout)
+        # Dataset Information label at the top
+        dataset_label = QLabel("<b>Dataset Information</b>")
+        dataset_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        metadata_layout.addWidget(dataset_label)
         
+        # Metadata text box takes up the rest of the space
         self.metadata_text = QTextEdit()
         self.metadata_text.setReadOnly(True)
-        self.metadata_text.setMaximumHeight(150)
-        metadata_layout.addWidget(self.metadata_text)
+        metadata_layout.addWidget(self.metadata_text, 1)  # Stretch factor of 1 to fill remaining space
         metadata_widget.setLayout(metadata_layout)
         row1_splitter.addWidget(metadata_widget)
         
@@ -135,6 +135,8 @@ class MainWindow(QMainWindow):
         
         # Data picker
         self.data_picker = DataPicker(data_manager=self.data_manager)
+        self.data_picker.setMinimumWidth(LEFT_PANEL_WIDTH)
+        self.data_picker.setMaximumWidth(LEFT_PANEL_WIDTH)
         row2_splitter.addWidget(self.data_picker)
         
         # Playback controls
@@ -184,6 +186,7 @@ class MainWindow(QMainWindow):
         self.playback_controls.stop_clicked.connect(self.playback_controller.stop)
         self.playback_controls.speed_changed.connect(self.playback_controller.set_speed)
         self.playback_controls.loop_toggled.connect(self.playback_controller.enable_loop)
+        self.playback_controls.channel_changed.connect(self._on_active_channel_changed)
         
         # Playback controller updates
         self.playback_controller.playhead_updated.connect(self._on_playhead_updated)
@@ -230,17 +233,14 @@ class MainWindow(QMainWindow):
         # Update waveform model
         self.waveform_model.set_stream(stream)
         
-        # Update channel combo box
-        self.channel_combo.clear()
+        # Update channel combo box in playback controls
         channels = self.waveform_model.get_all_channels()
-        self.channel_combo.addItems(channels)
+        self.playback_controls.set_channels(channels)
         
         # Set active channel
         active_channel = self.waveform_model.get_active_channel()
         if active_channel:
-            index = self.channel_combo.findText(active_channel)
-            if index >= 0:
-                self.channel_combo.setCurrentIndex(index)
+            self.playback_controls.set_active_channel(active_channel)
         
         # Update waveform viewer
         self.waveform_viewer.update_waveform(stream, active_channel)

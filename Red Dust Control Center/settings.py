@@ -15,3 +15,6 @@ DEFAULT_NETWORK = "XB"
 
 # Available stations from InSight SEIS
 AVAILABLE_STATIONS = ["ELYSE", "ELYS0", "ELYHK", "ELYH0"]
+
+# UI Layout settings
+LEFT_PANEL_WIDTH = 300  # Width for Dataset Information and Data Picker panels (in pixels)
