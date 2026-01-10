@@ -2,8 +2,9 @@
 Main Window for Red Dust Control Center.
 """
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                               QLabel, QTextEdit, QComboBox, QPushButton, QSplitter)
-from PySide6.QtCore import Qt, QThread, Signal
+                               QLabel, QTextEdit, QComboBox, QPushButton, QSplitter,
+                               QMenuBar, QFileDialog, QMessageBox)
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from pathlib import Path
 import logging
 
@@ -75,10 +76,17 @@ class MainWindow(QMainWindow):
         self.osc_manager = OSCManager(self.waveform_model, self.playback_controller)
         self.session_manager = SessionManager()
         
+        # Current session file path (None if not saved yet)
+        self.current_session_path = None
+        
+        # Pending session state to restore after data loads
+        self.pending_session_state = None
+        
         # Data loading thread
         self.load_thread = None
         
         # Setup UI
+        self._setup_menu_bar()
         self._setup_ui()
         self._setup_logging()
         self._connect_signals()
@@ -91,6 +99,35 @@ class MainWindow(QMainWindow):
         self._load_metadata_async()
         
         logger.info("Red Dust Control Center initialized")
+    
+    def _setup_menu_bar(self):
+        """Set up the menu bar with File and About menus."""
+        menubar = self.menuBar()
+        
+        # File menu
+        file_menu = menubar.addMenu("File")
+        
+        # Save action
+        save_action = file_menu.addAction("Save")
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self._on_save)
+        
+        # Save As action
+        save_as_action = file_menu.addAction("Save As...")
+        save_as_action.setShortcut("Ctrl+Shift+S")
+        save_as_action.triggered.connect(self._on_save_as)
+        
+        # Load action
+        load_action = file_menu.addAction("Load...")
+        load_action.setShortcut("Ctrl+O")
+        load_action.triggered.connect(self._on_load)
+        
+        # About menu
+        about_menu = menubar.addMenu("About")
+        
+        # About action
+        about_action = about_menu.addAction("About Red Dust Control Center")
+        about_action.triggered.connect(self._on_about)
     
     def _setup_ui(self):
         """Set up the user interface."""
@@ -253,6 +290,11 @@ class MainWindow(QMainWindow):
         
         # Update playback controller
         self.playback_controller.set_waveform_model(self.waveform_model)
+        
+        # If we have pending session state, restore it now
+        if self.pending_session_state:
+            self._restore_session_state_after_load(self.pending_session_state)
+            self.pending_session_state = None
     
     def _on_load_error(self, error_message: str):
         """Handle data load error."""
@@ -409,4 +451,263 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
         self.metadata_thread.metadata_loaded.connect(on_metadata_loaded)
         self.metadata_thread.start()
         logger.info("Background metadata refresh thread started")
+    
+    def _restore_data_selection(self, selection: dict):
+        """Restore data selection and trigger data load."""
+        network = selection['network']
+        station = selection['station']
+        year = selection['year']
+        doy = selection['doy']
+        
+        logger.info(f"Restoring data selection: {network}/{station}/{year}/{doy}")
+        
+        # Block signals to prevent automatic loading when we change combo boxes
+        self.data_picker.station_combo.blockSignals(True)
+        self.data_picker.year_combo.blockSignals(True)
+        self.data_picker.day_combo.blockSignals(True)
+        
+        try:
+            # Set network
+            network_index = self.data_picker.network_combo.findText(network)
+            if network_index >= 0:
+                self.data_picker.network_combo.setCurrentIndex(network_index)
+            
+            # Set station (without triggering signal)
+            station_index = self.data_picker.station_combo.findText(station)
+            if station_index >= 0:
+                self.data_picker.station_combo.setCurrentIndex(station_index)
+            
+            # Manually load years for the selected station (without triggering default selection)
+            if self.data_picker.data_manager:
+                try:
+                    years = self.data_picker.data_manager.get_available_years(network, station)
+                    self.data_picker._available_years = years
+                    
+                    # Update year combo box
+                    self.data_picker.year_combo.clear()
+                    if years:
+                        self.data_picker.year_combo.addItems([str(y) for y in years])
+                        # Set the year we want (not the default)
+                        year_index = self.data_picker.year_combo.findText(str(year))
+                        if year_index >= 0:
+                            self.data_picker.year_combo.setCurrentIndex(year_index)
+                        else:
+                            logger.warning(f"Year {year} not found in available years")
+                            self.data_picker.year_combo.setCurrentIndex(0)
+                    else:
+                        logger.warning(f"No years found for {network}/{station}")
+                except Exception as e:
+                    logger.error(f"Failed to load available years: {e}", exc_info=True)
+            
+            # Manually load days for the selected year (without triggering default selection)
+            if self.data_picker.data_manager and self.data_picker.year_combo.count() > 0:
+                try:
+                    days = self.data_picker.data_manager.get_available_days(network, station, year)
+                    self.data_picker._available_days = days
+                    
+                    # Update day combo box
+                    self.data_picker.day_combo.clear()
+                    if days:
+                        self.data_picker.day_combo.addItems([str(d) for d in days])
+                        # Set the day we want (not the default)
+                        day_index = self.data_picker.day_combo.findText(str(doy))
+                        if day_index >= 0:
+                            self.data_picker.day_combo.setCurrentIndex(day_index)
+                        else:
+                            logger.warning(f"Day {doy} not found in available days")
+                            self.data_picker.day_combo.setCurrentIndex(0)
+                    else:
+                        logger.warning(f"No days found for {network}/{station}/{year}")
+                except Exception as e:
+                    logger.error(f"Failed to load available days: {e}", exc_info=True)
+            
+            # Now trigger the load with the restored selection
+            self.data_picker.load_requested.emit({
+                'network': network,
+                'station': station,
+                'year': year,
+                'doy': doy
+            })
+        finally:
+            # Unblock signals
+            self.data_picker.station_combo.blockSignals(False)
+            self.data_picker.year_combo.blockSignals(False)
+            self.data_picker.day_combo.blockSignals(False)
+    
+    def _on_save(self):
+        """Handle Save menu action."""
+        if self.current_session_path:
+            self._save_session(self.current_session_path)
+        else:
+            self._on_save_as()
+    
+    def _on_save_as(self):
+        """Handle Save As menu action."""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Session",
+            str(self.session_manager.sessions_dir / "session.json"),
+            "JSON Files (*.json);;All Files (*)"
+        )
+        
+        if file_path:
+            self.current_session_path = Path(file_path)
+            self._save_session(self.current_session_path)
+    
+    def _save_session(self, file_path: Path):
+        """Save current application state to file."""
+        try:
+            # Get current state from all components
+            state = self.session_manager.create_state_dict(
+                self.data_manager,
+                self.waveform_model,
+                self.playback_controller,
+                self.osc_manager,
+                self.data_picker
+            )
+            
+            # Save to file
+            self.session_manager.save_session(file_path, state)
+            
+            QMessageBox.information(
+                self,
+                "Session Saved",
+                f"Session saved successfully to:\n{file_path}"
+            )
+            logger.info(f"Session saved to {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to save session: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Save Error",
+                f"Failed to save session:\n{str(e)}"
+            )
+    
+    def _on_load(self):
+        """Handle Load menu action."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Session",
+            str(self.session_manager.sessions_dir),
+            "JSON Files (*.json);;All Files (*)"
+        )
+        
+        if file_path:
+            self._load_session(Path(file_path))
+    
+    def _load_session(self, file_path: Path):
+        """Load application state from file."""
+        try:
+            # Load state from file
+            state = self.session_manager.load_session(file_path)
+            
+            # Store state for restoration after data loads
+            self.pending_session_state = state
+            
+            # Restore data selection first (this will trigger data load)
+            selection = self.session_manager.get_data_selection(state)
+            if selection:
+                self._restore_data_selection(selection)
+            
+            # Restore OSC objects (doesn't depend on data)
+            if 'objects' in state:
+                self.session_manager.restore_objects(
+                    state['objects'],
+                    self.osc_manager,
+                    self.object_cards
+                )
+            
+            # If data is already loaded, restore the rest immediately
+            if self.waveform_model.get_stream():
+                self._restore_session_state_after_load(state)
+                self.pending_session_state = None
+            
+            self.current_session_path = file_path
+            
+            QMessageBox.information(
+                self,
+                "Session Loaded",
+                f"Session loaded successfully from:\n{file_path}"
+            )
+            logger.info(f"Session loaded from {file_path}")
+        except FileNotFoundError:
+            QMessageBox.warning(
+                self,
+                "Load Error",
+                f"File not found:\n{file_path}"
+            )
+        except ValueError as e:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                f"Invalid session file:\n{str(e)}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to load session: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                f"Failed to load session:\n{str(e)}"
+            )
+    
+    def _restore_session_state_after_load(self, state: dict):
+        """Restore session state that depends on data being loaded."""
+        # Restore active channel
+        if 'active_channel' in state and state['active_channel']:
+            active_channel = state['active_channel']
+            logger.info(f"Restoring active channel: {active_channel}")
+            if self.waveform_model:
+                self.waveform_model.set_active_channel(active_channel)
+            if self.playback_controls:
+                self.playback_controls.set_active_channel(active_channel)
+            if self.waveform_viewer:
+                stream = self.waveform_model.get_stream()
+                if stream:
+                    self.waveform_viewer.update_waveform(stream, active_channel)
+            self._update_metadata()
+        
+        # Restore playback settings
+        if 'playback' in state:
+            playback_state = state['playback']
+            
+            # Restore speed
+            if 'speed' in playback_state:
+                speed = playback_state['speed']
+                if self.playback_controls:
+                    self.playback_controls.set_speed(speed)
+                self.playback_controller.set_speed(speed)
+            
+            # Restore loop range
+            if 'loop_start' in playback_state and 'loop_end' in playback_state:
+                loop_start = playback_state['loop_start']
+                loop_end = playback_state['loop_end']
+                if loop_start and loop_end:
+                    try:
+                        self.playback_controller.set_loop_range(loop_start, loop_end)
+                        loop_enabled = playback_state.get('loop_enabled', False)
+                        self.playback_controller.enable_loop(loop_enabled)
+                        if self.playback_controls:
+                            self.playback_controls.set_loop_enabled(loop_enabled)
+                            self.playback_controls.update_loop_display(loop_start, loop_end)
+                        if self.waveform_viewer:
+                            self.waveform_viewer.set_loop_range(loop_start, loop_end)
+                    except Exception as e:
+                        logger.warning(f"Failed to restore loop range: {e}")
+            elif self.playback_controls:
+                self.playback_controls.set_loop_enabled(False)
+    
+    def _on_about(self):
+        """Handle About menu action."""
+        QMessageBox.about(
+            self,
+            "About Red Dust Control Center",
+            "Red Dust Control Center\n\n"
+            "A tool for visualizing and controlling seismic waveform data.\n\n"
+            "Features:\n"
+            "- Load and visualize seismic data from PDS archive\n"
+            "- Playback control with variable speed\n"
+            "- Loop range selection\n"
+            "- OSC output to interactive objects\n"
+            "- Save and load session configurations"
+        )
 

@@ -76,7 +76,7 @@ class SessionManager:
             logger.error(f"Failed to load session: {e}")
             raise
     
-    def create_state_dict(self, data_manager, waveform_model, playback_controller, osc_manager) -> Dict[str, Any]:
+    def create_state_dict(self, data_manager, waveform_model, playback_controller, osc_manager, data_picker=None) -> Dict[str, Any]:
         """
         Create state dictionary from current application state.
         
@@ -85,11 +85,22 @@ class SessionManager:
             waveform_model: WaveformModel instance
             playback_controller: PlaybackController instance
             osc_manager: OSCManager instance
+            data_picker: DataPicker instance (optional)
         
         Returns:
             State dictionary
         """
         state = {}
+        
+        # Data picker selection (network, station, year, doy)
+        if data_picker:
+            selection = data_picker.get_selection()
+            state['data_selection'] = {
+                'network': selection['network'],
+                'station': selection['station'],
+                'year': selection['year'],
+                'doy': selection['doy']
+            }
         
         # Dataset information (if available)
         if waveform_model and waveform_model.get_stream():
@@ -100,8 +111,6 @@ class SessionManager:
                 state['dataset'] = {
                     'network': trace.stats.network,
                     'station': trace.stats.station,
-                    # Year and DOY would need to be stored separately
-                    # For now, we'll need to get this from the data manager
                 }
         
         # Active channel
@@ -179,4 +188,77 @@ class SessionManager:
             return [self._deserialize_timestamps(item) for item in obj]
         else:
             return obj
+    
+    def get_data_selection(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Get data selection from state dictionary.
+        
+        Args:
+            state: State dictionary loaded from file
+        
+        Returns:
+            Dictionary with network, station, year, doy or None
+        """
+        if 'data_selection' not in state:
+            return None
+        
+        selection = state['data_selection']
+        network = selection.get('network')
+        station = selection.get('station')
+        year = selection.get('year')
+        doy = selection.get('doy')
+        
+        if not (network and station and year and doy):
+            return None
+        
+        return {
+            'network': network,
+            'station': station,
+            'year': year,
+            'doy': doy
+        }
+    
+    def restore_objects(self, objects: list, osc_manager, object_cards) -> None:
+        """
+        Restore OSC objects configuration.
+        
+        Args:
+            objects: List of object configuration dictionaries
+            osc_manager: OSCManager instance
+            object_cards: ObjectCardsContainer instance
+        """
+        if not objects:
+            return
+        
+        logger.info(f"Restoring {len(objects)} OSC objects")
+        
+        # Clear existing objects
+        if object_cards:
+            # Remove all existing cards
+            card_names = list(object_cards._cards.keys())
+            for name in card_names:
+                object_cards._remove_object(name)
+        
+        if osc_manager:
+            osc_manager._objects.clear()
+        
+        # Add restored objects
+        for obj_config in objects:
+            name = obj_config.get('name')
+            if name:
+                # Add card
+                if object_cards:
+                    card = object_cards._add_object(name)
+                    card.set_config(obj_config)
+                
+                # Add OSC object
+                if osc_manager:
+                    osc_manager.add_object(
+                        name,
+                        obj_config.get('address', f'/red_dust/{name.lower().replace(" ", "_")}'),
+                        obj_config.get('host', '127.0.0.1'),
+                        obj_config.get('port', 8000),
+                        obj_config.get('scale', 1.0)
+                    )
+                    osc_manager.set_object_enabled(name, obj_config.get('enabled', True))
 
