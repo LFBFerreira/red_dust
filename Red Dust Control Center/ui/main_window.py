@@ -18,7 +18,7 @@ from ui.waveform_viewer import WaveformViewer
 from ui.playback_controls import PlaybackControls
 from ui.object_cards import ObjectCardsContainer
 from ui.log_viewer import LogViewer, LogHandler
-from settings import LEFT_PANEL_WIDTH
+from settings import LEFT_PANEL_WIDTH, WAVEFORM_VIEWER_DEFAULT_WIDTH
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,9 @@ class MainWindow(QMainWindow):
         """Initialize MainWindow."""
         super().__init__()
         self.setWindowTitle("Red Dust Control Center")
-        self.setMinimumSize(1200, 800)
+        # Calculate minimum window size based on component sizes
+        min_width = LEFT_PANEL_WIDTH + WAVEFORM_VIEWER_DEFAULT_WIDTH
+        self.setMinimumSize(min_width, 800)  # Allow window to be resized smaller
         
         # Initialize core components
         self.data_manager = DataManager()
@@ -165,6 +167,9 @@ class MainWindow(QMainWindow):
         row1_splitter.setStretchFactor(0, 1)
         row1_splitter.setStretchFactor(1, 3)
         
+        # Set initial sizes: metadata panel (fixed) and waveform viewer (default width)
+        row1_splitter.setSizes([LEFT_PANEL_WIDTH, WAVEFORM_VIEWER_DEFAULT_WIDTH])
+        
         main_layout.addWidget(row1_splitter)
         
         # Row 2: Data Selection and Playback
@@ -234,13 +239,20 @@ class MainWindow(QMainWindow):
         
         # OSC manager
         self.osc_manager.streaming_state_changed.connect(self._on_streaming_state_changed)
+        self.osc_manager.object_streaming_state_changed.connect(self._on_object_streaming_state_changed)
+        self.osc_manager.object_value_updated.connect(self._on_object_value_updated)
         
         # Object cards
         self.object_cards.object_added.connect(self._on_object_added)
         self.object_cards.object_removed.connect(self._on_object_removed)
         self.object_cards.object_config_changed.connect(self._on_object_config_changed)
         
-        # Start OSC streaming when playback starts
+        # Connect card streaming signals
+        for card in self.object_cards._cards.values():
+            card.streaming_started.connect(self._on_card_streaming_started)
+            card.streaming_stopped.connect(self._on_card_streaming_stopped)
+        
+        # Start OSC streaming when playback starts (global - kept for backward compatibility)
         self.playback_controller.state_changed.connect(self._on_playback_state_changed)
     
     def _on_load_requested(self, selection: dict):
@@ -291,6 +303,14 @@ class MainWindow(QMainWindow):
         # Update playback controller
         self.playback_controller.set_waveform_model(self.waveform_model)
         
+        # Update value display with initial values
+        time_range = self.waveform_model.get_time_range()
+        if time_range:
+            initial_time = time_range[0]
+            raw_value = self.waveform_model.get_raw_value(initial_time)
+            normalized_value = self.waveform_model.get_normalized_value(initial_time)
+            self.playback_controls.update_value_display(raw_value, normalized_value)
+        
         # If we have pending session state, restore it now
         if self.pending_session_state:
             self._restore_session_state_after_load(self.pending_session_state)
@@ -337,6 +357,11 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
         time_range = self.waveform_model.get_time_range()
         if time_range:
             self.playback_controls.update_time_display(timestamp, time_range[1])
+        
+        # Update value display (raw and normalized)
+        raw_value = self.waveform_model.get_raw_value(timestamp)
+        normalized_value = self.waveform_model.get_normalized_value(timestamp)
+        self.playback_controls.update_value_display(raw_value, normalized_value)
     
     def _on_playback_state_changed(self, state: str):
         """Handle playback state change."""
@@ -358,16 +383,29 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
     
     def _on_object_added(self, name: str):
         """Handle new object added."""
-        config = self.object_cards.get_card(name).get_config()
+        card = self.object_cards.get_card(name)
+        if not card:
+            return
+        
+        # Connect streaming signals for new card
+        card.streaming_started.connect(self._on_card_streaming_started)
+        card.streaming_stopped.connect(self._on_card_streaming_stopped)
+        
+        config = card.get_config()
         self.osc_manager.add_object(
             config['name'],
             config['address'],
             config['host'],
             config['port'],
-            config['scale']
+            config.get('remap_min', 0.0),
+            config.get('remap_max', 1.0)
         )
-        if not config['enabled']:
-            self.osc_manager.set_object_enabled(name, False)
+        
+        # Set streaming state if enabled
+        if config.get('streaming_enabled', False):
+            self.osc_manager.start_object_streaming(name)
+        else:
+            self.osc_manager.stop_object_streaming(name)
     
     def _on_object_removed(self, name: str):
         """Handle object removed."""
@@ -376,27 +414,74 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
     def _on_object_config_changed(self, name: str):
         """Handle object configuration change."""
         card = self.object_cards.get_card(name)
-        if card:
-            config = card.get_config()
-            obj = self.osc_manager.get_object(name)
-            if obj:
-                # Update OSC object (recreate if host/port changed)
-                if obj.host != config['host'] or obj.port != config['port']:
-                    self.osc_manager.remove_object(name)
-                    self.osc_manager.add_object(
-                        config['name'],
-                        config['address'],
-                        config['host'],
-                        config['port'],
-                        config['scale']
-                    )
-                else:
-                    self.osc_manager.update_object_scale(name, config['scale'])
-                self.osc_manager.set_object_enabled(name, config['enabled'])
+        if not card:
+            return
+        
+        config = card.get_config()
+        obj = self.osc_manager.get_object(name)
+        if not obj:
+            return
+        
+        # Update OSC object (recreate if host/port changed)
+        if obj.host != config['host'] or obj.port != config['port']:
+            # Store current streaming state
+            was_streaming = obj.streaming_enabled
+            
+            self.osc_manager.remove_object(name)
+            self.osc_manager.add_object(
+                config['name'],
+                config['address'],
+                config['host'],
+                config['port'],
+                config.get('remap_min', 0.0),
+                config.get('remap_max', 1.0)
+            )
+            
+            # Restore streaming state
+            if was_streaming:
+                self.osc_manager.start_object_streaming(name)
+        else:
+            # Update remapping parameters
+            self.osc_manager.update_object_remapping(
+                name,
+                config.get('remap_min', 0.0),
+                config.get('remap_max', 1.0)
+            )
+        
+        # Update streaming state (handled by card buttons, but sync here for consistency)
+        if config.get('streaming_enabled', False):
+            if not self.osc_manager.is_object_streaming(name):
+                self.osc_manager.start_object_streaming(name)
+        else:
+            if self.osc_manager.is_object_streaming(name):
+                self.osc_manager.stop_object_streaming(name)
     
     def _on_streaming_state_changed(self, streaming: bool):
-        """Handle OSC streaming state change."""
-        logger.debug(f"OSC streaming: {'started' if streaming else 'stopped'}")
+        """Handle OSC streaming state change (global)."""
+        logger.debug(f"OSC streaming (global): {'started' if streaming else 'stopped'}")
+    
+    def _on_object_streaming_state_changed(self, name: str, streaming: bool):
+        """Handle per-object streaming state change."""
+        card = self.object_cards.get_card(name)
+        if card:
+            card.set_streaming_state(streaming)
+        logger.debug(f"Object {name} streaming: {'started' if streaming else 'stopped'}")
+    
+    def _on_object_value_updated(self, name: str, remapped_value: float):
+        """Handle object value update for UI display."""
+        card = self.object_cards.get_card(name)
+        if card:
+            obj = self.osc_manager.get_object(name)
+            if obj:
+                card.update_value(remapped_value, obj.remap_min, obj.remap_max)
+    
+    def _on_card_streaming_started(self, name: str):
+        """Handle card start button clicked."""
+        self.osc_manager.start_object_streaming(name)
+    
+    def _on_card_streaming_stopped(self, name: str):
+        """Handle card stop button clicked."""
+        self.osc_manager.stop_object_streaming(name)
     
     def _on_active_channel_changed(self, channel: str):
         """Handle active channel selection change."""
@@ -407,6 +492,13 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
                 self.waveform_viewer.update_waveform(stream, channel)
             self._update_metadata()
             logger.info(f"Active channel changed to: {channel}")
+            
+            # Update value display for new channel
+            current_time = self.playback_controller.get_current_timestamp()
+            if current_time:
+                raw_value = self.waveform_model.get_raw_value(current_time)
+                normalized_value = self.waveform_model.get_normalized_value(current_time)
+                self.playback_controls.update_value_display(raw_value, normalized_value)
     
     def _load_metadata_async(self):
         """Load metadata (available years/days) in background."""

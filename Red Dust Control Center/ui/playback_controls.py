@@ -43,11 +43,11 @@ class PlaybackControls(QWidget):
         channel_layout.addStretch()  # Push to left
         row1.addLayout(channel_layout, 1)  # Stretch factor for equal columns
         
-        # Loop label (center) - align center
+        # Value display (center) - shows raw and normalized values
         row1.addStretch()
-        self.loop_label = QLabel("No loop")
-        self.loop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        row1.addWidget(self.loop_label, 1)  # Stretch factor for equal columns
+        self.value_label = QLabel("Raw: -- | Norm: --")
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row1.addWidget(self.value_label, 1)  # Stretch factor for equal columns
         
         # Time information (right) - align right
         row1.addStretch()
@@ -141,20 +141,34 @@ class PlaybackControls(QWidget):
         total_str = self._format_time(total)
         self.time_label.setText(f"{current_str} / {total_str}")
     
+    def update_value_display(self, raw_value: float = None, normalized_value: float = None) -> None:
+        """
+        Update value display showing raw and normalized values.
+        
+        Args:
+            raw_value: Raw waveform value (before remapping)
+            normalized_value: Normalized value (after remapping, 0-1)
+        """
+        if raw_value is None or normalized_value is None:
+            self.value_label.setText("Raw: -- | Norm: --")
+        else:
+            # Format raw value with appropriate precision
+            raw_str = f"{raw_value:.6f}" if abs(raw_value) < 1000 else f"{raw_value:.2f}"
+            # Format normalized value to 3 decimal places
+            norm_str = f"{normalized_value:.3f}"
+            self.value_label.setText(f"Raw: {raw_str} | Norm: {norm_str}")
+    
     def update_loop_display(self, start: UTCDateTime = None, end: UTCDateTime = None) -> None:
         """
-        Update loop range display.
+        Update loop range display (kept for compatibility but not used in UI).
         
         Args:
             start: Loop start timestamp
             end: Loop end timestamp
         """
-        if start is None or end is None:
-            self.loop_label.setText("No loop")
-        else:
-            start_str = self._format_time(start)
-            end_str = self._format_time(end)
-            self.loop_label.setText(f"Loop: {start_str} - {end_str}")
+        # This method is kept for compatibility but the loop display is now replaced
+        # by the value display. Loop info can be shown elsewhere if needed.
+        pass
     
     def set_loop_enabled(self, enabled: bool) -> None:
         """

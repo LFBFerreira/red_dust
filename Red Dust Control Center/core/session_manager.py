@@ -149,8 +149,9 @@ class SessionManager:
                     'address': obj.address,
                     'host': obj.host,
                     'port': obj.port,
-                    'scale': obj.scale,
-                    'enabled': obj.enabled
+                    'remap_min': obj.remap_min,
+                    'remap_max': obj.remap_max,
+                    'streaming_enabled': obj.streaming_enabled
                 })
             state['objects'] = objects
         
@@ -249,16 +250,47 @@ class SessionManager:
                 # Add card
                 if object_cards:
                     card = object_cards._add_object(name)
-                    card.set_config(obj_config)
+                    # Convert old format to new format if needed
+                    config = obj_config.copy()
+                    if 'scale' in config and 'remap_max' not in config:
+                        # Backward compatibility: convert scale to remap_max
+                        config['remap_max'] = config.pop('scale')
+                        config['remap_min'] = 0.0
+                    if 'enabled' in config and 'streaming_enabled' not in config:
+                        # Backward compatibility: convert enabled to streaming_enabled
+                        config['streaming_enabled'] = config.pop('enabled')
+                    card.set_config(config)
                 
                 # Add OSC object
                 if osc_manager:
+                    remap_min = obj_config.get('remap_min')
+                    remap_max = obj_config.get('remap_max')
+                    
+                    # Backward compatibility: convert old scale to remap_max
+                    if remap_min is None or remap_max is None:
+                        scale = obj_config.get('scale', 1.0)
+                        remap_min = 0.0
+                        remap_max = scale
+                    
                     osc_manager.add_object(
                         name,
                         obj_config.get('address', f'/red_dust/{name.lower().replace(" ", "_")}'),
                         obj_config.get('host', '127.0.0.1'),
                         obj_config.get('port', 8000),
-                        obj_config.get('scale', 1.0)
+                        remap_min,
+                        remap_max
                     )
-                    osc_manager.set_object_enabled(name, obj_config.get('enabled', True))
+                    
+                    # Restore streaming state (but don't auto-start)
+                    streaming_enabled = obj_config.get('streaming_enabled', False)
+                    # Also check old 'enabled' for backward compatibility
+                    if 'enabled' in obj_config and 'streaming_enabled' not in obj_config:
+                        streaming_enabled = obj_config.get('enabled', False)
+                    
+                    if streaming_enabled:
+                        # Don't auto-start streaming when loading session
+                        # User must manually start streaming
+                        pass
+                    else:
+                        osc_manager.stop_object_streaming(name)
 

@@ -151,6 +151,40 @@ class WaveformModel:
         self._recalculate_normalization()
         logger.info(f"Scaling updated: P{lo_percentile}-P{hi_percentile}")
     
+    def get_raw_value(self, timestamp: UTCDateTime) -> Optional[float]:
+        """
+        Get raw value for active channel at given timestamp.
+        
+        Args:
+            timestamp: UTC timestamp
+        
+        Returns:
+            Raw value or None if out of range or no active channel
+        """
+        trace = self._get_active_trace()
+        if trace is None:
+            return None
+        
+        # Check if timestamp is within trace bounds
+        start_time = trace.stats.starttime
+        end_time = trace.stats.endtime
+        
+        if timestamp < start_time or timestamp > end_time:
+            return None
+        
+        # Calculate sample index
+        sample_rate = trace.stats.sampling_rate
+        time_offset = timestamp - start_time
+        sample_index = int(time_offset * sample_rate)
+        
+        # Clamp to valid range
+        sample_index = max(0, min(sample_index, len(trace.data) - 1))
+        
+        # Get raw value
+        raw_value = float(trace.data[sample_index])
+        
+        return raw_value
+    
     def get_normalized_value(self, timestamp: UTCDateTime) -> float:
         """
         Get normalized value (0..1) for active channel at given timestamp.

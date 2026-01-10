@@ -17,4 +17,14 @@ DEFAULT_NETWORK = "XB"
 AVAILABLE_STATIONS = ["ELYSE", "ELYS0", "ELYHK", "ELYH0"]
 
 # UI Layout settings
-LEFT_PANEL_WIDTH = 300  # Width for Dataset Information and Data Picker panels (in pixels)
+LEFT_PANEL_WIDTH = 250  # Width for Dataset Information and Data Picker panels (in pixels)
+
+WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default width for Waveform Viewer (in pixels)
+
+# Interactive Objects settings
+INTERACTIVE_OBJECTS_HEIGHT = 280  # Fixed height for Interactive Objects container (in pixels)
+
+OBJECT_CARD_WIDTH = 250  # Fixed width for individual object cards (in pixels)
+
+# OSC Streaming settings
+STREAMING_PORT = 8000  # Default UDP port for OSC streaming (can be overridden per object)

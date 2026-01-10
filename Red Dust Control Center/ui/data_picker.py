@@ -79,7 +79,7 @@ class DataPicker(QWidget):
         
         layout.addLayout(row1_layout)
         
-        # Row 2: Year and Day of Year side by side (2x2 grid - row 2)
+        # Row 2: Year and Day side by side (2x2 grid - row 2)
         row2_layout = QHBoxLayout()
         
         # Year selection (cell 2,1)
@@ -91,10 +91,10 @@ class DataPicker(QWidget):
         year_layout.addWidget(self.year_combo, 1)  # Stretch factor to fill cell
         row2_layout.addLayout(year_layout, 1)  # Stretch factor for equal grid cells
         
-        # Day of year selection (cell 2,2)
+        # Day selection (cell 2,2)
         day_layout = QHBoxLayout()
         day_layout.setContentsMargins(0, 0, 0, 0)
-        day_layout.addWidget(QLabel("Day of Year:"))
+        day_layout.addWidget(QLabel("Day:"))
         self.day_combo = QComboBox()
         day_layout.addWidget(self.day_combo, 1)  # Stretch factor to fill cell
         row2_layout.addLayout(day_layout, 1)  # Stretch factor for equal grid cells
