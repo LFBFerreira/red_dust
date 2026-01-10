@@ -30,69 +30,96 @@ class PlaybackControls(QWidget):
         """Set up the UI components."""
         layout = QVBoxLayout()
         
-        # Top row: Channel selector (left), Loop info (center), Time display (right)
-        top_row = QHBoxLayout()
+        # Row 1: Active Channel (left) | Loop label (center) | Time information (right)
+        row1 = QHBoxLayout()
         
-        # Channel selector (left)
+        # Active Channel (left) - align left, combo box right next to label
         channel_layout = QHBoxLayout()
+        channel_layout.setContentsMargins(0, 0, 0, 0)
         channel_layout.addWidget(QLabel("Active Channel:"))
         self.channel_combo = QComboBox()
         self.channel_combo.currentTextChanged.connect(self._on_channel_changed)
         channel_layout.addWidget(self.channel_combo)
-        top_row.addLayout(channel_layout)
+        channel_layout.addStretch()  # Push to left
+        row1.addLayout(channel_layout, 1)  # Stretch factor for equal columns
         
-        # Loop information (center)
-        top_row.addStretch()
+        # Loop label (center) - align center
+        row1.addStretch()
         self.loop_label = QLabel("No loop")
-        top_row.addWidget(self.loop_label)
+        self.loop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row1.addWidget(self.loop_label, 1)  # Stretch factor for equal columns
         
-        # Time display (right)
-        top_row.addStretch()
+        # Time information (right) - align right
+        row1.addStretch()
         self.time_label = QLabel("--:--:-- / --:--:--")
-        top_row.addWidget(self.time_label)
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row1.addWidget(self.time_label, 1)  # Stretch factor for equal columns
         
-        layout.addLayout(top_row)
+        layout.addLayout(row1)
         
-        # Middle row: Play, Pause, Stop buttons equally spaced and stretched
-        button_layout = QHBoxLayout()
+        # Row 2: Play | Pause | Stop buttons stretched to full width
+        row2 = QHBoxLayout()
         
+        # Play button - stretch to full width
         self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.play_clicked.emit)
-        button_layout.addWidget(self.play_button, 1)  # Stretch factor of 1
+        row2.addWidget(self.play_button, 1)  # Stretch factor of 1 to fill space
         
+        # Pause button - stretch to full width
         self.pause_button = QPushButton("Pause")
         self.pause_button.clicked.connect(self.pause_clicked.emit)
-        button_layout.addWidget(self.pause_button, 1)  # Stretch factor of 1
+        row2.addWidget(self.pause_button, 1)  # Stretch factor of 1 to fill space
         
+        # Stop button - stretch to full width
         self.stop_button = QPushButton("Stop")
         self.stop_button.clicked.connect(self.stop_clicked.emit)
-        button_layout.addWidget(self.stop_button, 1)  # Stretch factor of 1
+        row2.addWidget(self.stop_button, 1)  # Stretch factor of 1 to fill space
         
-        layout.addLayout(button_layout)
+        layout.addLayout(row2)
         
-        # Bottom row: Speed (first column), Enable Loop (second column)
-        bottom_row = QHBoxLayout()
+        # Row 3: Speed manual adjust (left) | 3 speed buttons (middle) | Enable Loop checkbox (right)
+        row3 = QHBoxLayout()
         
-        # Speed control (first column)
+        # Speed manual adjust (left) - align left, input box right next to label
         speed_layout = QHBoxLayout()
+        speed_layout.setContentsMargins(0, 0, 0, 0)
         speed_layout.addWidget(QLabel("Speed:"))
         self.speed_spinbox = QDoubleSpinBox()
-        self.speed_spinbox.setRange(0.1, 10.0)
+        self.speed_spinbox.setRange(0.1, 1000.0)
         self.speed_spinbox.setSingleStep(0.1)
         self.speed_spinbox.setValue(1.0)
         self.speed_spinbox.setDecimals(1)
         self.speed_spinbox.valueChanged.connect(self._on_speed_changed)
         speed_layout.addWidget(self.speed_spinbox)
         speed_layout.addWidget(QLabel("x"))
-        bottom_row.addLayout(speed_layout)
+        speed_layout.addStretch()  # Push to left
+        row3.addLayout(speed_layout, 1)  # Stretch factor for equal columns
         
-        # Enable Loop checkbox (second column)
-        bottom_row.addStretch()
+        # 3 speed buttons (middle) - align center
+        row3.addStretch()
+        speed_button_layout = QHBoxLayout()
+        
+        btn_1x = QPushButton("1x")
+        btn_1x.clicked.connect(lambda: self._set_speed_preset(1.0))
+        speed_button_layout.addWidget(btn_1x)
+        
+        btn_100x = QPushButton("100x")
+        btn_100x.clicked.connect(lambda: self._set_speed_preset(100.0))
+        speed_button_layout.addWidget(btn_100x)
+        
+        btn_1000x = QPushButton("1000x")
+        btn_1000x.clicked.connect(lambda: self._set_speed_preset(1000.0))
+        speed_button_layout.addWidget(btn_1000x)
+        
+        row3.addLayout(speed_button_layout, 1)  # Stretch factor for equal columns
+        
+        # Enable Loop checkbox (right) - align right
+        row3.addStretch()
         self.loop_checkbox = QCheckBox("Enable Loop")
         self.loop_checkbox.toggled.connect(self.loop_toggled.emit)
-        bottom_row.addWidget(self.loop_checkbox)
+        row3.addWidget(self.loop_checkbox, 1, Qt.AlignmentFlag.AlignRight)  # Align right
         
-        layout.addLayout(bottom_row)
+        layout.addLayout(row3)
         
         layout.addStretch()
         self.setLayout(layout)
@@ -165,6 +192,10 @@ class PlaybackControls(QWidget):
     def _on_speed_changed(self, value: float) -> None:
         """Handle speed value change."""
         self.speed_changed.emit(value)
+    
+    def _set_speed_preset(self, speed: float) -> None:
+        """Set speed to a preset value."""
+        self.speed_spinbox.setValue(speed)
     
     def _on_channel_changed(self, channel: str) -> None:
         """Handle channel selection change."""

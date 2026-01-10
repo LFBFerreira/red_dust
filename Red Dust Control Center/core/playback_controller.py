@@ -119,21 +119,19 @@ class PlaybackController(QObject):
         Set playback speed multiplier.
         
         Args:
-            multiplier: Speed multiplier (0.1 to 10.0)
+            multiplier: Speed multiplier (0.1 to 1000.0)
         """
-        multiplier = max(0.1, min(10.0, multiplier))
+        multiplier = max(0.1, min(1000.0, multiplier))
         
         # If currently playing, adjust start position to maintain continuity
-        if self._state == "playing" and self._playback_start_time is not None:
+        # This ensures playback continues from current position without restarting
+        if self._state == "playing" and self._playback_start_time is not None and self._current_time is not None:
             from time import time as current_time
-            elapsed = current_time() - self._playback_start_time
-            old_speed = self._speed
+            # Simply update the start position to current position and reset the timer
+            # This way playback continues from where it is, just at a different speed
+            self._playback_start_position = self._current_time
+            self._playback_start_time = current_time()
             self._speed = multiplier
-            
-            # Recalculate current position based on new speed
-            time_delta = elapsed * old_speed
-            self._playback_start_position = self._current_time - UTCDateTime(time_delta)
-            self._playback_start_time = current_time
         else:
             self._speed = multiplier
         
@@ -217,8 +215,8 @@ class PlaybackController(QObject):
         elapsed = current_time() - self._playback_start_time
         time_delta = elapsed * self._speed
         
-        # Calculate new position
-        new_time = self._playback_start_position + UTCDateTime(time_delta)
+        # Calculate new position (add seconds directly to UTCDateTime)
+        new_time = self._playback_start_position + time_delta
         
         # Get time range
         time_range = self._waveform_model.get_time_range()
@@ -233,7 +231,7 @@ class PlaybackController(QObject):
                 # Loop back to start
                 self._current_time = self._loop_start
                 self._playback_start_position = self._loop_start
-                self._playback_start_time = current_time
+                self._playback_start_time = current_time()
             else:
                 self._current_time = new_time
         else:

@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 import requests
 from obspy import Stream, UTCDateTime, read
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -411,7 +413,7 @@ class DataManager:
     def download_mseed_files(self, file_urls: List[str], cache_path: Path, 
                              progress_callback=None) -> List[Path]:
         """
-        Download .mseed files to local cache.
+        Download .mseed files to local cache using parallel threads.
         
         Args:
             file_urls: List of URLs to .mseed files
@@ -422,10 +424,16 @@ class DataManager:
             List of local file paths for successfully downloaded files
         """
         cache_path.mkdir(parents=True, exist_ok=True)
-        downloaded_files = []
         total_files = len(file_urls)
+        downloaded_files = []
+        downloaded_lock = threading.Lock()
+        progress_counter = 0
+        progress_lock = threading.Lock()
         
-        for index, url in enumerate(file_urls, start=1):
+        def download_single_file(url: str) -> Optional[Path]:
+            """Download a single file and return its local path, or None on failure."""
+            nonlocal progress_counter
+            
             try:
                 # Extract filename from URL
                 filename = url.split('/')[-1]
@@ -434,11 +442,14 @@ class DataManager:
                 # Skip if already downloaded
                 if local_path.exists():
                     logger.info(f"File already cached: {filename}")
-                    downloaded_files.append(local_path)
-                    # Still report progress for already-cached files
-                    if progress_callback:
-                        progress_callback(len(downloaded_files), total_files)
-                    continue
+                    with downloaded_lock:
+                        downloaded_files.append(local_path)
+                    # Update progress counter
+                    with progress_lock:
+                        progress_counter += 1
+                        if progress_callback:
+                            progress_callback(progress_counter, total_files)
+                    return local_path
                 
                 # Download file
                 logger.info(f"Downloading {filename}...")
@@ -447,24 +458,53 @@ class DataManager:
                 
                 # Save to cache
                 local_path.write_bytes(response.content)
-                downloaded_files.append(local_path)
                 logger.info(f"Downloaded {filename}")
                 
-                # Report progress
-                if progress_callback:
-                    progress_callback(len(downloaded_files), total_files)
+                # Add to downloaded list
+                with downloaded_lock:
+                    downloaded_files.append(local_path)
+                
+                # Update progress counter
+                with progress_lock:
+                    progress_counter += 1
+                    if progress_callback:
+                        progress_callback(progress_counter, total_files)
+                
+                return local_path
                 
             except requests.RequestException as e:
                 logger.warning(f"Failed to download {url}: {e}")
-                # Continue with other files, but still report progress
-                if progress_callback:
-                    progress_callback(len(downloaded_files), total_files)
+                # Update progress counter even on failure
+                with progress_lock:
+                    progress_counter += 1
+                    if progress_callback:
+                        progress_callback(progress_counter, total_files)
+                return None
             except Exception as e:
                 logger.error(f"Unexpected error downloading {url}: {e}")
-                # Continue with other files, but still report progress
-                if progress_callback:
-                    progress_callback(len(downloaded_files), total_files)
+                # Update progress counter even on failure
+                with progress_lock:
+                    progress_counter += 1
+                    if progress_callback:
+                        progress_callback(progress_counter, total_files)
+                return None
         
+        # Download files in parallel using 5 threads
+        logger.info(f"Starting parallel download of {total_files} files using 5 threads...")
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            # Submit all download tasks
+            future_to_url = {executor.submit(download_single_file, url): url for url in file_urls}
+            
+            # Process completed downloads as they finish
+            for future in as_completed(future_to_url):
+                url = future_to_url[future]
+                try:
+                    result = future.result()
+                    # Result is already handled in download_single_file
+                except Exception as e:
+                    logger.error(f"Exception in download thread for {url}: {e}")
+        
+        logger.info(f"Parallel download complete: {len(downloaded_files)}/{total_files} files downloaded")
         return downloaded_files
     
     def load_from_cache(self, cache_path: Path) -> Stream:

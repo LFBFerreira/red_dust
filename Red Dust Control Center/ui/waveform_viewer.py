@@ -44,6 +44,9 @@ class WaveformViewer(QWidget):
         self.plot_widget.showGrid(x=True, y=True)
         self.plot_widget.setMouseEnabled(x=True, y=True)
         
+        # Initial X limit (will be updated when data loads)
+        self.plot_widget.plotItem.vb.setLimits(xMin=0)
+        
         # Enable click-drag for loop selection
         self.plot_widget.scene().sigMouseClicked.connect(self._on_mouse_click)
         self.plot_widget.scene().sigMouseMoved.connect(self._on_mouse_move)
@@ -82,9 +85,10 @@ class WaveformViewer(QWidget):
                 channels[channel_id] = []
             channels[channel_id].append(trace)
         
-        # Plot each channel
+        # Plot each channel and collect Y values for limits
         active_colors = ['#00d4ff', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']  # Bright colors for active channel
         color_idx = 0
+        all_y_values = []  # Collect all Y values to find min/max
         
         for channel_id, traces in channels.items():
             # Merge traces if multiple (ObsPy handles this)
@@ -100,6 +104,11 @@ class WaveformViewer(QWidget):
             times = np.array([(trace.stats.starttime + i / trace.stats.sampling_rate).timestamp 
                             for i in range(len(trace.data))])
             data = trace.data
+            
+            # Collect Y values (filter out NaN values)
+            valid_data = data[~np.isnan(data)]
+            if len(valid_data) > 0:
+                all_y_values.extend(valid_data)
             
             # Choose color and pen width
             is_active = (channel_id == active_channel)
@@ -118,10 +127,29 @@ class WaveformViewer(QWidget):
             
             color_idx += 1
         
-        # Add playhead line
+        # Add playhead line and set X/Y limits based on data
         if len(stream) > 0:
             trace = stream[0]
             time_range = (trace.stats.starttime.timestamp, trace.stats.endtime.timestamp)
+            
+            # Set X limits to prevent panning beyond min and max X values
+            # Use the start and end time of the data as the limits
+            self.plot_widget.plotItem.vb.setLimits(
+                xMin=time_range[0],
+                xMax=time_range[1]
+            )
+            
+            # Set Y limits based on dataset min/max values
+            if len(all_y_values) > 0:
+                y_min = np.min(all_y_values)
+                y_max = np.max(all_y_values)
+                # Add a small margin for better visualization
+                y_margin = (y_max - y_min) * 0.05 if y_max != y_min else abs(y_max) * 0.05 if y_max != 0 else 1.0
+                self.plot_widget.plotItem.vb.setLimits(
+                    yMin=y_min - y_margin,
+                    yMax=y_max + y_margin
+                )
+            
             self._playhead_line = pg.InfiniteLine(
                 pos=time_range[0],
                 angle=90,
