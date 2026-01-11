@@ -169,6 +169,10 @@ class DataPicker(QWidget):
     def _on_station_changed(self, station: str) -> None:
         """Handle station selection change."""
         logger.debug(f"Station changed to: {station}")
+        # Clear days combo box immediately when station changes
+        self.day_combo.clear()
+        self._available_days = []
+        # Reload years (which will also reload days for the selected year)
         self._load_available_years()
     
     def _on_year_changed(self, year_str: str = None) -> None:

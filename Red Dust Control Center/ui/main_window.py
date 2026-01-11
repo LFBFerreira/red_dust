@@ -39,6 +39,10 @@ class DataLoadThread(QThread):
         self.doy = doy
     
     def run(self):
+        import time
+        thread_start = time.time()
+        logger.info(f"[DEBUG] DataLoadThread started for {self.network}/{self.station}/{self.year}/{self.doy:03d}")
+        
         try:
             # Progress callback for downloads
             def progress_callback(downloaded: int, total: int):
@@ -46,17 +50,30 @@ class DataLoadThread(QThread):
             
             # File count callback
             def file_count_callback(total: int):
+                logger.info(f"[DEBUG] Total files to download: {total}")
                 self.file_count_known.emit(total)
             
+            fetch_start = time.time()
+            logger.info(f"[DEBUG] Starting fetch_and_cache...")
             cache_path = self.data_manager.fetch_and_cache(
                 self.network, self.station, self.year, self.doy,
                 progress_callback=progress_callback,
                 file_count_callback=file_count_callback
             )
+            fetch_time = time.time() - fetch_start
+            logger.info(f"[DEBUG] fetch_and_cache completed in {fetch_time:.2f}s")
+            
+            load_start = time.time()
+            logger.info(f"[DEBUG] Starting load_from_cache...")
             stream = self.data_manager.load_from_cache(cache_path)
+            load_time = time.time() - load_start
+            logger.info(f"[DEBUG] load_from_cache completed in {load_time:.2f}s")
+            
+            total_time = time.time() - thread_start
+            logger.info(f"[DEBUG] DataLoadThread complete in {total_time:.2f}s total")
             self.data_loaded.emit(stream)
         except Exception as e:
-            logger.exception("Error in data load thread")
+            logger.exception(f"[DEBUG] Error in data load thread for {self.network}/{self.station}/{self.year}/{self.doy:03d}")
             self.error_occurred.emit(str(e))
 
 
@@ -204,6 +221,10 @@ class MainWindow(QMainWindow):
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.INFO)
         
+        # Clear any existing handlers to avoid duplicates
+        # (e.g., from basicConfig or previous MainWindow instances)
+        root_logger.handlers.clear()
+        
         # Console handler
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
@@ -211,10 +232,11 @@ class MainWindow(QMainWindow):
         console_handler.setFormatter(formatter)
         root_logger.addHandler(console_handler)
         
-        # UI handler
+        # UI handler - use formatter without level prefix since LogViewer adds it
         ui_handler = LogHandler(self.log_viewer)
         ui_handler.setLevel(logging.INFO)
-        ui_handler.setFormatter(formatter)
+        ui_formatter = logging.Formatter('%(message)s')  # No level prefix, LogViewer adds it
+        ui_handler.setFormatter(ui_formatter)
         root_logger.addHandler(ui_handler)
     
     def _connect_signals(self):
@@ -229,6 +251,7 @@ class MainWindow(QMainWindow):
         self.playback_controls.speed_changed.connect(self.playback_controller.set_speed)
         self.playback_controls.loop_toggled.connect(self.playback_controller.enable_loop)
         self.playback_controls.channel_changed.connect(self._on_active_channel_changed)
+        self.playback_controls.position_slider.valueChanged.connect(self._on_position_slider_changed)
         
         # Playback controller updates
         self.playback_controller.playhead_updated.connect(self._on_playhead_updated)
@@ -255,9 +278,48 @@ class MainWindow(QMainWindow):
         # Start OSC streaming when playback starts (global - kept for backward compatibility)
         self.playback_controller.state_changed.connect(self._on_playback_state_changed)
     
+    def _reset_state_for_new_load(self):
+        """Reset all state when loading new data (especially when station changes)."""
+        logger.info(f"[DEBUG] Resetting state for new data load...")
+        
+        # Stop any ongoing playback
+        if self.playback_controller:
+            logger.debug(f"[DEBUG] Stopping playback controller...")
+            self.playback_controller.stop()
+        
+        # Clear waveform viewer
+        if self.waveform_viewer:
+            logger.debug(f"[DEBUG] Clearing waveform viewer...")
+            self.waveform_viewer.plot_widget.clear()
+        
+        # Reset waveform model (clear old stream)
+        if self.waveform_model:
+            logger.debug(f"[DEBUG] Resetting waveform model...")
+            self.waveform_model.set_stream(None)
+        
+        # Stop any OSC streaming
+        if self.osc_manager:
+            logger.debug(f"[DEBUG] Stopping OSC streaming...")
+            # OSC manager will handle stopping when model is cleared
+        
+        # Clear any pending load thread
+        if self.load_thread and self.load_thread.isRunning():
+            logger.warning(f"[DEBUG] Previous load thread still running, waiting for it...")
+            self.load_thread.wait(1000)  # Wait up to 1 second
+        
+        logger.info(f"[DEBUG] State reset complete")
+    
     def _on_load_requested(self, selection: dict):
         """Handle data load request."""
-        logger.info(f"Loading data: {selection}")
+        import time
+        logger.info(f"[DEBUG] ===== Starting data load request =====")
+        logger.info(f"[DEBUG] Selection: {selection}")
+        logger.info(f"[DEBUG] Station: {selection.get('station', 'unknown')}")
+        
+        # Reset state when loading new data (especially when station changes)
+        logger.info(f"[DEBUG] Resetting state for new data load...")
+        self._reset_state_for_new_load()
+        
         self.data_picker.set_loading(True)
         
         # Start loading in background thread
@@ -273,48 +335,86 @@ class MainWindow(QMainWindow):
         self.load_thread.file_count_known.connect(self.data_picker.set_total_files)
         self.load_thread.download_progress.connect(self.data_picker.update_download_progress)
         self.load_thread.start()
+        logger.info(f"[DEBUG] Data load thread started")
     
     def _on_data_loaded(self, stream):
         """Handle successful data load."""
-        logger.info(f"Data loaded: {len(stream)} traces")
+        import time
+        process_start = time.time()
+        
+        logger.info(f"[DEBUG] ===== Data loaded callback started =====")
+        logger.info(f"[DEBUG] Stream contains {len(stream)} traces")
+        
+        # Log stream details for debugging
+        if stream and len(stream) > 0:
+            first_trace = stream[0]
+            logger.info(f"[DEBUG] First trace: {first_trace.id}, "
+                       f"station: {first_trace.stats.station}, "
+                       f"samples: {first_trace.stats.npts:,}, "
+                       f"rate: {first_trace.stats.sampling_rate} Hz")
+            total_samples = sum(t.stats.npts for t in stream)
+            logger.info(f"[DEBUG] Total samples across all traces: {total_samples:,}")
+        
         self.data_picker.set_loading(False)
         
         # Update waveform model
+        logger.info(f"[DEBUG] Setting stream in waveform model...")
+        model_start = time.time()
         self.waveform_model.set_stream(stream)
+        model_time = time.time() - model_start
+        logger.info(f"[DEBUG] Waveform model updated in {model_time:.2f}s")
         
         # Update channel combo box in playback controls
+        logger.info(f"[DEBUG] Updating channel controls...")
         channels = self.waveform_model.get_all_channels()
+        logger.info(f"[DEBUG] Found {len(channels)} channels: {channels}")
         self.playback_controls.set_channels(channels)
         
         # Set active channel
         active_channel = self.waveform_model.get_active_channel()
+        logger.info(f"[DEBUG] Active channel: {active_channel}")
         if active_channel:
             self.playback_controls.set_active_channel(active_channel)
+            # Update object cards with active channel
+            self._update_object_card_channels()
         
         # Update waveform viewer
+        logger.info(f"[DEBUG] Updating waveform viewer...")
+        viewer_start = time.time()
         self.waveform_viewer.update_waveform(stream, active_channel)
+        viewer_time = time.time() - viewer_start
+        logger.info(f"[DEBUG] Waveform viewer updated in {viewer_time:.2f}s")
         
         # Update metadata display
+        logger.info(f"[DEBUG] Updating metadata display...")
         self._update_metadata()
         
         # Reset playback
+        logger.info(f"[DEBUG] Resetting playback controller...")
         self.playback_controller.stop()
         
         # Update playback controller
         self.playback_controller.set_waveform_model(self.waveform_model)
         
         # Update value display with initial values
+        logger.info(f"[DEBUG] Updating value display...")
         time_range = self.waveform_model.get_time_range()
         if time_range:
             initial_time = time_range[0]
             raw_value = self.waveform_model.get_raw_value(initial_time)
             normalized_value = self.waveform_model.get_normalized_value(initial_time)
             self.playback_controls.update_value_display(raw_value, normalized_value)
+            # Initialize position slider
+            self.playback_controls.update_position_slider(initial_time, time_range[0], time_range[1])
         
         # If we have pending session state, restore it now
         if self.pending_session_state:
+            logger.info(f"[DEBUG] Restoring pending session state...")
             self._restore_session_state_after_load(self.pending_session_state)
             self.pending_session_state = None
+        
+        process_time = time.time() - process_start
+        logger.info(f"[DEBUG] ===== Data loaded callback complete in {process_time:.2f}s =====")
     
     def _on_load_error(self, error_message: str):
         """Handle data load error."""
@@ -357,14 +457,41 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
         time_range = self.waveform_model.get_time_range()
         if time_range:
             self.playback_controls.update_time_display(timestamp, time_range[1])
+            # Update position slider
+            self.playback_controls.update_position_slider(timestamp, time_range[0], time_range[1])
         
         # Update value display (raw and normalized)
         raw_value = self.waveform_model.get_raw_value(timestamp)
         normalized_value = self.waveform_model.get_normalized_value(timestamp)
         self.playback_controls.update_value_display(raw_value, normalized_value)
     
+    def _on_position_slider_changed(self, value: int) -> None:
+        """Handle position slider change."""
+        # Get time range
+        time_range = self.waveform_model.get_time_range()
+        if not time_range:
+            return
+        
+        start_time, end_time = time_range
+        
+        # Convert slider value to timestamp
+        percentage = value / 1000.0  # 0.0 to 1.0
+        total_duration = (end_time - start_time)
+        if total_duration <= 0:
+            return
+        
+        offset = total_duration * percentage
+        target_timestamp = start_time + offset
+        
+        # Seek to the new position
+        self.playback_controller.seek(target_timestamp)
+    
     def _on_playback_state_changed(self, state: str):
         """Handle playback state change."""
+        # Update button states in playback controls
+        self.playback_controls.set_playback_state(state)
+        
+        # Handle OSC streaming
         if state == "playing":
             self.osc_manager.start_streaming()
         elif state == "stopped":
@@ -475,6 +602,13 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
             if obj:
                 card.update_value(remapped_value, obj.remap_min, obj.remap_max)
     
+    def _update_object_card_channels(self):
+        """Update active channel for all object cards."""
+        active_channel = self.waveform_model.get_active_channel()
+        if active_channel:
+            for card in self.object_cards._cards.values():
+                card.set_active_channel(active_channel)
+    
     def _on_card_streaming_started(self, name: str):
         """Handle card start button clicked."""
         self.osc_manager.start_object_streaming(name)
@@ -492,6 +626,9 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
                 self.waveform_viewer.update_waveform(stream, channel)
             self._update_metadata()
             logger.info(f"Active channel changed to: {channel}")
+            
+            # Update object cards with new active channel
+            self._update_object_card_channels()
             
             # Update value display for new channel
             current_time = self.playback_controller.get_current_timestamp()

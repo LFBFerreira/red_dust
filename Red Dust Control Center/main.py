@@ -2,15 +2,11 @@
 Red Dust Control Center - Main Entry Point
 """
 import sys
-import logging
 from PySide6.QtWidgets import QApplication
 from ui.main_window import MainWindow
 
-# Configure logging before importing modules
-logging.basicConfig(
-    level=logging.DEBUG,  # Temporarily set to DEBUG to see HTML samples
-    format='[%(levelname)s] %(message)s'
-)
+# Note: Logging is configured in MainWindow._setup_logging()
+# to avoid duplicate handlers
 
 def main():
     """Main application entry point."""

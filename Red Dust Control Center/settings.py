@@ -6,7 +6,7 @@ the application. These can be modified to change default behavior.
 """
 
 # Default data selection values
-DEFAULT_STATION = "ELYHK"
+DEFAULT_STATION = "ELYSE"
 DEFAULT_YEAR = 2018
 DEFAULT_DAY_OF_YEAR = 360  # December 26, 2018
 

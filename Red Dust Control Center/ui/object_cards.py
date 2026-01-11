@@ -32,6 +32,8 @@ class ObjectCard(QFrame):
         super().__init__(parent)
         self._name = name
         self._streaming = False
+        self._active_channel = None
+        self._channel_colors = {}  # Cache of channel to color mapping
         self._setup_ui()
         self.setFrameStyle(QFrame.Shape.Box)
         self.setLineWidth(1)
@@ -206,6 +208,78 @@ class ObjectCard(QFrame):
             else:
                 self._on_stop_clicked()
     
+    def set_active_channel(self, channel: str) -> None:
+        """
+        Set the active channel for this object card.
+        The progress bar color will be based on the channel.
+        
+        Args:
+            channel: Active channel identifier (e.g., "03.BHU")
+        """
+        self._active_channel = channel
+        # Update progress bar color immediately if we have a color for this channel
+        if channel in self._channel_colors:
+            self._update_progress_bar_color()
+    
+    def _get_channel_color(self, channel: str) -> str:
+        """
+        Get a consistent color for a channel.
+        Uses the same color palette as the waveform viewer.
+        
+        Args:
+            channel: Channel identifier
+            
+        Returns:
+            Color hex code
+        """
+        # Use the same color palette as waveform viewer
+        channel_colors = ['#00d4ff', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+        
+        # Create a hash-based index for consistent color assignment
+        # This ensures the same channel always gets the same color
+        if channel not in self._channel_colors:
+            # Use hash of channel name to get consistent index
+            channel_hash = hash(channel)
+            color_idx = abs(channel_hash) % len(channel_colors)
+            self._channel_colors[channel] = channel_colors[color_idx]
+        
+        return self._channel_colors[channel]
+    
+    def _update_progress_bar_color(self) -> None:
+        """Update progress bar color based on active channel."""
+        if self._active_channel:
+            color = self._get_channel_color(self._active_channel)
+            # Convert hex color to RGB for Qt
+            # Remove # and convert to RGB
+            hex_color = color.lstrip('#')
+            r = int(hex_color[0:2], 16)
+            g = int(hex_color[2:4], 16)
+            b = int(hex_color[4:6], 16)
+            
+            # Use the channel color for the progress bar chunk
+            self.value_progress.setStyleSheet(f"""
+                QProgressBar {{
+                    border: 1px solid grey;
+                    border-radius: 3px;
+                    text-align: center;
+                }}
+                QProgressBar::chunk {{
+                    background-color: rgb({r}, {g}, {b});
+                }}
+            """)
+        else:
+            # Default grey if no channel
+            self.value_progress.setStyleSheet("""
+                QProgressBar {
+                    border: 1px solid grey;
+                    border-radius: 3px;
+                    text-align: center;
+                }
+                QProgressBar::chunk {
+                    background-color: grey;
+                }
+            """)
+    
     def update_value(self, remapped_value: float, remap_min: float, remap_max: float) -> None:
         """
         Update value display with remapped value.
@@ -229,25 +303,8 @@ class ObjectCard(QFrame):
         # Update progress bar format to show actual remapped value
         self.value_progress.setFormat(f"{remapped_value:.3f}")
         
-        # Update chunk color based on percentage (keep the same bar style)
-        if percentage < 50:
-            color = "green"
-        elif percentage < 75:
-            color = "orange"
-        else:
-            color = "red"
-        
-        # Only update the chunk color, keep the same bar style
-        self.value_progress.setStyleSheet(f"""
-            QProgressBar {{
-                border: 1px solid grey;
-                border-radius: 3px;
-                text-align: center;
-            }}
-            QProgressBar::chunk {{
-                background-color: {color};
-            }}
-        """)
+        # Update color based on active channel (not percentage)
+        self._update_progress_bar_color()
     
     def get_name(self) -> str:
         """Get object name."""

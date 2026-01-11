@@ -441,7 +441,15 @@ class DataManager:
                 
                 # Skip if already downloaded
                 if local_path.exists():
-                    logger.info(f"File already cached: {filename}")
+                    # Get file size for logging
+                    file_size = local_path.stat().st_size
+                    if file_size < 1024:
+                        size_str = f"{file_size} B"
+                    elif file_size < 1024 * 1024:
+                        size_str = f"{file_size / 1024:.2f} KB"
+                    else:
+                        size_str = f"{file_size / (1024 * 1024):.2f} MB"
+                    logger.info(f"File already cached: {filename} ({size_str})")
                     with downloaded_lock:
                         downloaded_files.append(local_path)
                     # Update progress counter
@@ -458,7 +466,17 @@ class DataManager:
                 
                 # Save to cache
                 local_path.write_bytes(response.content)
-                logger.info(f"Downloaded {filename}")
+                
+                # Get file size for logging
+                file_size = local_path.stat().st_size
+                if file_size < 1024:
+                    size_str = f"{file_size} B"
+                elif file_size < 1024 * 1024:
+                    size_str = f"{file_size / 1024:.2f} KB"
+                else:
+                    size_str = f"{file_size / (1024 * 1024):.2f} MB"
+                
+                logger.info(f"Downloaded {filename} ({size_str})")
                 
                 # Add to downloaded list
                 with downloaded_lock:
@@ -521,6 +539,9 @@ class DataManager:
             FileNotFoundError: If no .mseed files found
             ValueError: If data cannot be parsed
         """
+        import time
+        start_time = time.time()
+        
         if not cache_path.exists():
             raise FileNotFoundError(f"Cache directory does not exist: {cache_path}")
         
@@ -528,30 +549,76 @@ class DataManager:
         if not mseed_files:
             raise FileNotFoundError(f"No .mseed files found in {cache_path}")
         
-        logger.info(f"Loading {len(mseed_files)} .mseed files from cache...")
+        # Extract station info from path for debugging
+        path_parts = cache_path.parts
+        station_info = "unknown"
+        if len(path_parts) >= 3:
+            station_info = f"{path_parts[-3]}/{path_parts[-2]}/{path_parts[-1]}"
+        
+        logger.info(f"[DEBUG] Loading {len(mseed_files)} .mseed files from cache for {station_info}...")
+        logger.info(f"[DEBUG] Cache path: {cache_path}")
         
         try:
             # Load all files into a single stream
             stream = Stream()
-            for mseed_file in mseed_files:
+            load_start = time.time()
+            files_loaded = 0
+            total_size = 0
+            
+            for i, mseed_file in enumerate(mseed_files):
                 try:
+                    file_start = time.time()
                     trace_stream = read(str(mseed_file))
+                    file_load_time = time.time() - file_start
+                    
+                    # Calculate file size
+                    file_size = mseed_file.stat().st_size if mseed_file.exists() else 0
+                    total_size += file_size
+                    
                     stream += trace_stream
+                    files_loaded += 1
+                    
+                    # Log every 10th file or if file loading takes > 1 second
+                    if (i + 1) % 10 == 0 or file_load_time > 1.0:
+                        logger.debug(f"[DEBUG] Loaded file {i+1}/{len(mseed_files)}: {mseed_file.name} "
+                                   f"({file_size/1024/1024:.2f} MB, {file_load_time:.2f}s)")
                 except Exception as e:
                     logger.warning(f"Failed to parse {mseed_file.name}: {e}")
                     # Skip corrupted files
             
+            load_time = time.time() - load_start
+            logger.info(f"[DEBUG] File loading complete: {files_loaded}/{len(mseed_files)} files, "
+                       f"{total_size/1024/1024:.2f} MB total, {load_time:.2f}s elapsed")
+            
             if len(stream) == 0:
                 raise ValueError("No valid traces loaded from cache")
             
-            # Merge traces when possible (same network, station, location, channel)
-            stream.merge(method=1)  # Method 1: fill gaps with NaN
+            # Log trace information before merging
+            logger.info(f"[DEBUG] Before merge: {len(stream)} traces")
+            total_samples = sum(trace.stats.npts for trace in stream)
+            logger.info(f"[DEBUG] Total samples before merge: {total_samples:,}")
             
-            logger.info(f"Loaded stream with {len(stream)} traces")
+            # Merge traces when possible (same network, station, location, channel)
+            merge_start = time.time()
+            logger.info(f"[DEBUG] Starting trace merge operation...")
+            stream.merge(method=1)  # Method 1: fill gaps with NaN
+            merge_time = time.time() - merge_start
+            logger.info(f"[DEBUG] Merge complete: {len(stream)} traces after merge, {merge_time:.2f}s elapsed")
+            
+            # Log final trace information
+            total_samples_after = sum(trace.stats.npts for trace in stream)
+            logger.info(f"[DEBUG] Total samples after merge: {total_samples_after:,}")
+            for trace in stream:
+                logger.debug(f"[DEBUG] Trace: {trace.id}, samples: {trace.stats.npts:,}, "
+                           f"rate: {trace.stats.sampling_rate} Hz, "
+                           f"duration: {trace.stats.endtime - trace.stats.starttime:.1f}s")
+            
+            total_time = time.time() - start_time
+            logger.info(f"[DEBUG] Loaded stream with {len(stream)} traces in {total_time:.2f}s total")
             return stream
             
         except Exception as e:
-            logger.error(f"Failed to load data from cache: {e}")
+            logger.error(f"Failed to load data from cache: {e}", exc_info=True)
             raise
     
     def fetch_and_cache(self, network: str, station: str, year: int, doy: int,
@@ -595,11 +662,12 @@ class DataManager:
             file_count_callback(len(file_urls))
         
         # Download files
+        logger.info(f"[DEBUG] Starting download of {len(file_urls)} files for {network}/{station}/{year}/{doy:03d}")
         downloaded = self.download_mseed_files(file_urls, cache_path, progress_callback)
         
         if not downloaded:
             raise Exception(f"Failed to download any files from {url}")
         
-        logger.info(f"Cached {len(downloaded)} files to {cache_path}")
+        logger.info(f"[DEBUG] Download complete: {len(downloaded)}/{len(file_urls)} files cached to {cache_path}")
         return cache_path
 

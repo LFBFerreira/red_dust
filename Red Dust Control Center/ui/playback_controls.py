@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
                                QDoubleSpinBox, QCheckBox, QLabel, QSlider, QComboBox)
 from PySide6.QtCore import Signal, Qt
 from obspy import UTCDateTime
+from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,10 +21,14 @@ class PlaybackControls(QWidget):
     speed_changed = Signal(float)  # Emits speed multiplier
     loop_toggled = Signal(bool)  # Emits loop enabled state
     channel_changed = Signal(str)  # Emits active channel name
+    position_changed = Signal(UTCDateTime)  # Emits playhead position timestamp
     
     def __init__(self, parent=None):
         """Initialize PlaybackControls."""
         super().__init__(parent)
+        self._position_slider_updating = False
+        self._pending_slider_value = None
+        self._time_range = None  # Store time range for slider conversion
         self._setup_ui()
     
     def _setup_ui(self):
@@ -57,28 +62,55 @@ class PlaybackControls(QWidget):
         
         layout.addLayout(row1)
         
-        # Row 2: Play | Pause | Stop buttons stretched to full width
+        # Row 2: Playhead position slider
         row2 = QHBoxLayout()
+        
+        # Position label (left)
+        position_label = QLabel("Position:")
+        row2.addWidget(position_label)
+        
+        # Position slider (center) - stretches to fill space
+        self.position_slider = QSlider(Qt.Orientation.Horizontal)
+        self.position_slider.setMinimum(0)
+        self.position_slider.setMaximum(1000)  # Will be updated based on time range
+        self.position_slider.setValue(0)
+        self.position_slider.valueChanged.connect(self._on_position_slider_changed)
+        row2.addWidget(self.position_slider, 1)  # Stretch to fill
+        
+        # Position time display (right)
+        self.position_time_label = QLabel("--:--:--")
+        self.position_time_label.setMinimumWidth(80)
+        self.position_time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row2.addWidget(self.position_time_label)
+        
+        layout.addLayout(row2)
+        
+        # Row 3: Play | Pause | Stop buttons stretched to full width
+        row3 = QHBoxLayout()
         
         # Play button - stretch to full width
         self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.play_clicked.emit)
-        row2.addWidget(self.play_button, 1)  # Stretch factor of 1 to fill space
+        row3.addWidget(self.play_button, 1)  # Stretch factor of 1 to fill space
         
         # Pause button - stretch to full width
         self.pause_button = QPushButton("Pause")
         self.pause_button.clicked.connect(self.pause_clicked.emit)
-        row2.addWidget(self.pause_button, 1)  # Stretch factor of 1 to fill space
+        row3.addWidget(self.pause_button, 1)  # Stretch factor of 1 to fill space
         
         # Stop button - stretch to full width
         self.stop_button = QPushButton("Stop")
         self.stop_button.clicked.connect(self.stop_clicked.emit)
-        row2.addWidget(self.stop_button, 1)  # Stretch factor of 1 to fill space
+        self.stop_button.setEnabled(False)  # Disabled when stopped
+        row3.addWidget(self.stop_button, 1)  # Stretch factor of 1 to fill space
         
-        layout.addLayout(row2)
+        layout.addLayout(row3)
         
-        # Row 3: Speed manual adjust (left) | 3 speed buttons (middle) | Enable Loop checkbox (right)
-        row3 = QHBoxLayout()
+        # Set initial state (stopped)
+        self._update_button_states("stopped")
+        
+        # Row 4: Speed manual adjust (left) | 3 speed buttons (middle) | Enable Loop checkbox (right)
+        row4 = QHBoxLayout()
         
         # Speed manual adjust (left) - align left, input box right next to label
         speed_layout = QHBoxLayout()
@@ -93,10 +125,10 @@ class PlaybackControls(QWidget):
         speed_layout.addWidget(self.speed_spinbox)
         speed_layout.addWidget(QLabel("x"))
         speed_layout.addStretch()  # Push to left
-        row3.addLayout(speed_layout, 1)  # Stretch factor for equal columns
+        row4.addLayout(speed_layout, 1)  # Stretch factor for equal columns
         
         # 3 speed buttons (middle) - align center
-        row3.addStretch()
+        row4.addStretch()
         speed_button_layout = QHBoxLayout()
         
         btn_1x = QPushButton("1x")
@@ -111,15 +143,15 @@ class PlaybackControls(QWidget):
         btn_1000x.clicked.connect(lambda: self._set_speed_preset(1000.0))
         speed_button_layout.addWidget(btn_1000x)
         
-        row3.addLayout(speed_button_layout, 1)  # Stretch factor for equal columns
+        row4.addLayout(speed_button_layout, 1)  # Stretch factor for equal columns
         
         # Enable Loop checkbox (right) - align right
-        row3.addStretch()
+        row4.addStretch()
         self.loop_checkbox = QCheckBox("Enable Loop")
         self.loop_checkbox.toggled.connect(self.loop_toggled.emit)
-        row3.addWidget(self.loop_checkbox, 1, Qt.AlignmentFlag.AlignRight)  # Align right
+        row4.addWidget(self.loop_checkbox, 1, Qt.AlignmentFlag.AlignRight)  # Align right
         
-        layout.addLayout(row3)
+        layout.addLayout(row4)
         
         layout.addStretch()
         self.setLayout(layout)
@@ -216,6 +248,73 @@ class PlaybackControls(QWidget):
         if channel:
             self.channel_changed.emit(channel)
     
+    def _on_position_slider_changed(self, value: int) -> None:
+        """Handle position slider change."""
+        if self._position_slider_updating:
+            return
+        
+        # Store slider value - main window will convert it to timestamp using time range
+        self._pending_slider_value = value
+        # Signal will be emitted by main window after conversion
+    
+    def update_position_slider(self, current_time: UTCDateTime, start_time: UTCDateTime, end_time: UTCDateTime) -> None:
+        """
+        Update position slider based on current playhead position.
+        
+        Args:
+            current_time: Current playhead timestamp
+            start_time: Start of time range
+            end_time: End of time range
+        """
+        if start_time is None or end_time is None or current_time is None:
+            return
+        
+        # Store time range for slider value conversion
+        self._time_range = (start_time, end_time)
+        
+        # Prevent feedback loop
+        self._position_slider_updating = True
+        
+        # Calculate position as percentage
+        total_duration = (end_time - start_time)
+        if total_duration > 0:
+            elapsed = (current_time - start_time)
+            percentage = elapsed / total_duration
+            slider_value = int(percentage * 1000)  # 0-1000 range
+            slider_value = max(0, min(1000, slider_value))  # Clamp
+            self.position_slider.setValue(slider_value)
+        
+        # Update position time label
+        self.position_time_label.setText(self._format_time(current_time))
+        
+        self._position_slider_updating = False
+    
+    def get_pending_position(self) -> Optional[UTCDateTime]:
+        """
+        Get pending position from slider if user is dragging.
+        
+        Returns:
+            Timestamp corresponding to slider position, or None if no pending change
+        """
+        if self._pending_slider_value is None or self._time_range is None:
+            return None
+        
+        start_time, end_time = self._time_range
+        slider_value = self._pending_slider_value
+        percentage = slider_value / 1000.0  # 0.0 to 1.0
+        
+        total_duration = (end_time - start_time)
+        if total_duration <= 0:
+            return None
+        
+        offset = total_duration * percentage
+        timestamp = start_time + offset
+        
+        # Clear pending value after reading
+        self._pending_slider_value = None
+        
+        return timestamp
+    
     def set_channels(self, channels: list[str]) -> None:
         """
         Set available channels in the combo box.
@@ -237,4 +336,33 @@ class PlaybackControls(QWidget):
         index = self.channel_combo.findText(channel)
         if index >= 0:
             self.channel_combo.setCurrentIndex(index)
+    
+    def _update_button_states(self, state: str) -> None:
+        """
+        Update button states based on playback state.
+        
+        Args:
+            state: Playback state ("stopped", "playing", "paused")
+        """
+        if state == "playing":
+            self.play_button.setEnabled(False)   # Disable play when playing
+            self.pause_button.setEnabled(True)   # Enable pause when playing
+            self.stop_button.setEnabled(True)    # Enable stop when playing
+        elif state == "paused":
+            self.play_button.setEnabled(True)    # Enable play when paused
+            self.pause_button.setEnabled(False)  # Disable pause when paused
+            self.stop_button.setEnabled(True)    # Enable stop when paused
+        else:  # stopped
+            self.play_button.setEnabled(True)    # Enable play when stopped
+            self.pause_button.setEnabled(False)  # Disable pause when stopped
+            self.stop_button.setEnabled(False)   # Disable stop when stopped
+    
+    def set_playback_state(self, state: str) -> None:
+        """
+        Set playback state and update button states.
+        
+        Args:
+            state: Playback state ("stopped", "playing", "paused")
+        """
+        self._update_button_states(state)
 

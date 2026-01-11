@@ -15,4 +15,3 @@ def get_default_date() -> date:
         date object for the default year and day of year
     """
     return date(DEFAULT_YEAR, 1, 1) + timedelta(days=DEFAULT_DAY_OF_YEAR - 1)
-

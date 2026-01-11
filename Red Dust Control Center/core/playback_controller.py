@@ -194,6 +194,40 @@ class PlaybackController(QObject):
         """
         return self._current_time
     
+    def seek(self, timestamp: UTCDateTime) -> None:
+        """
+        Seek to a specific timestamp.
+        
+        Args:
+            timestamp: Target UTC timestamp
+        """
+        if self._waveform_model is None:
+            logger.warning("Cannot seek: no waveform model set")
+            return
+        
+        time_range = self._waveform_model.get_time_range()
+        if not time_range:
+            logger.warning("Cannot seek: no time range available")
+            return
+        
+        start_time, end_time = time_range
+        
+        # Clamp timestamp to valid range
+        if timestamp < start_time:
+            timestamp = start_time
+        elif timestamp > end_time:
+            timestamp = end_time
+        
+        # If playing, update playback start position to maintain continuity
+        if self._state == "playing" and self._playback_start_time is not None:
+            from time import time as current_time
+            self._playback_start_position = timestamp
+            self._playback_start_time = current_time()
+        
+        self._current_time = timestamp
+        self.playhead_updated.emit(self._current_time)
+        logger.debug(f"Seeked to {timestamp}")
+    
     def get_playback_state(self) -> str:
         """
         Get current playback state.

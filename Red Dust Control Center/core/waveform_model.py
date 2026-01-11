@@ -111,6 +111,9 @@ class WaveformModel:
     
     def _recalculate_normalization(self) -> None:
         """Recalculate normalization parameters for active channel."""
+        import time
+        calc_start = time.time()
+        
         trace = self._get_active_trace()
         if trace is None:
             self._normalization_min = None
@@ -119,20 +122,30 @@ class WaveformModel:
         
         # Get all data values
         data = trace.data
+        data_size = len(data)
+        
+        logger.info(f"[DEBUG] Recalculating normalization for channel {self._active_channel}: "
+                   f"{data_size:,} samples")
         
         if len(data) == 0:
             self._normalization_min = 0.0
             self._normalization_max = 1.0
             return
         
-        # Calculate percentiles
+        # Calculate percentiles - this can be slow for large datasets
+        logger.debug(f"[DEBUG] Computing percentiles P{self._lo_percentile} and P{self._hi_percentile}...")
+        percentile_start = time.time()
         lo_val = np.percentile(data, self._lo_percentile)
         hi_val = np.percentile(data, self._hi_percentile)
+        percentile_time = time.time() - percentile_start
         
         self._normalization_min = float(lo_val)
         self._normalization_max = float(hi_val)
         
-        logger.debug(f"Normalization range: {self._normalization_min} to {self._normalization_max}")
+        calc_time = time.time() - calc_start
+        logger.info(f"[DEBUG] Normalization calculated in {calc_time:.2f}s "
+                   f"(percentile calc: {percentile_time:.2f}s): "
+                   f"range {self._normalization_min:.6f} to {self._normalization_max:.6f}")
     
     def update_scaling(self, lo_percentile: float, hi_percentile: float) -> None:
         """
