@@ -7,6 +7,8 @@ from typing import Dict, Optional, Any
 from obspy import UTCDateTime
 import logging
 
+from settings import SERIAL_BAUDRATE
+
 logger = logging.getLogger(__name__)
 
 
@@ -140,19 +142,13 @@ class SessionManager:
                 state['playback']['loop_start'] = None
                 state['playback']['loop_end'] = None
         
-        # OSC objects
+        # Interactive objects (OSC and Serial)
         if osc_manager:
             objects = []
             for name, obj in osc_manager.get_all_objects().items():
-                objects.append({
-                    'name': obj.name,
-                    'address': obj.address,
-                    'host': obj.host,
-                    'port': obj.port,
-                    'remap_min': obj.remap_min,
-                    'remap_max': obj.remap_max,
-                    'streaming_enabled': obj.streaming_enabled
-                })
+                obj_config = obj.get_config_dict()
+                obj_config['streaming_enabled'] = obj.streaming_enabled
+                objects.append(obj_config)
             state['objects'] = objects
         
         return state
@@ -235,13 +231,15 @@ class SessionManager:
         
         # Clear existing objects
         if object_cards:
-            # Remove all existing cards
+            # Remove all existing cards (this will trigger proper cleanup)
             card_names = list(object_cards._cards.keys())
             for name in card_names:
                 object_cards._remove_object(name)
         
         if osc_manager:
-            osc_manager._objects.clear()
+            # Properly close all object connections before clearing
+            for name in list(osc_manager._objects.keys()):
+                osc_manager.remove_object(name)
         
         # Add restored objects
         for obj_config in objects:
@@ -249,7 +247,9 @@ class SessionManager:
             if name:
                 # Add card
                 if object_cards:
-                    card = object_cards._add_object(name)
+                    # Determine communication type from config
+                    comm_type = obj_config.get('type', 'OSC')
+                    card = object_cards._add_object(comm_type, name)
                     # Convert old format to new format if needed
                     config = obj_config.copy()
                     if 'scale' in config and 'remap_max' not in config:
@@ -261,8 +261,9 @@ class SessionManager:
                         config['streaming_enabled'] = config.pop('enabled')
                     card.set_config(config)
                 
-                # Add OSC object
+                # Add object (OSC or Serial)
                 if osc_manager:
+                    comm_type = obj_config.get('type', 'OSC')  # Default to OSC for backward compatibility
                     remap_min = obj_config.get('remap_min')
                     remap_max = obj_config.get('remap_max')
                     
@@ -272,14 +273,26 @@ class SessionManager:
                         remap_min = 0.0
                         remap_max = scale
                     
-                    osc_manager.add_object(
-                        name,
-                        obj_config.get('address', f'/red_dust/{name.lower().replace(" ", "_")}'),
-                        obj_config.get('host', '127.0.0.1'),
-                        obj_config.get('port', 8000),
-                        remap_min,
-                        remap_max
-                    )
+                    if comm_type == 'OSC':
+                        osc_manager.add_osc_object(
+                            name,
+                            obj_config.get('address', f'/red_dust/{name.lower().replace(" ", "_")}'),
+                            obj_config.get('host', '127.0.0.1'),
+                            obj_config.get('port', 8000),
+                            remap_min,
+                            remap_max
+                        )
+                    elif comm_type == 'Serial':
+                        osc_manager.add_serial_object(
+                            name,
+                            obj_config.get('port', 'COM3'),
+                            obj_config.get('baudrate', SERIAL_BAUDRATE),
+                            remap_min,
+                            remap_max
+                        )
+                    else:
+                        logger.warning(f"Unknown communication type {comm_type} for object {name}, skipping")
+                        continue
                     
                     # Restore streaming state (but don't auto-start)
                     streaming_enabled = obj_config.get('streaming_enabled', False)

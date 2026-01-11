@@ -1,110 +1,28 @@
 """
-OSC Manager for streaming normalized data to interactive objects.
+Object Manager for streaming normalized data to interactive objects (OSC and Serial).
 """
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 from obspy import UTCDateTime
 from PySide6.QtCore import QObject, QTimer, Signal
-from pythonosc.udp_client import UDPClient
 import logging
+
+from core.interactive_object import InteractiveObject
+from core.osc_object import OSCObject
+from core.serial_object import SerialObject
+from settings import SERIAL_BAUDRATE
 
 logger = logging.getLogger(__name__)
 
-# Fixed OSC output rate: 60 Hz
-OSC_OUTPUT_RATE = 60
-OSC_INTERVAL_MS = 1000 // OSC_OUTPUT_RATE  # ~16.67 ms
+# Fixed output rate: 60 Hz
+OUTPUT_RATE = 60
+OUTPUT_INTERVAL_MS = 1000 // OUTPUT_RATE  # ~16.67 ms
 
-
-class OSCObject:
-    """Configuration for a single OSC output object."""
-    
-    def __init__(self, name: str, address: str, host: str, port: int, remap_min: float = 0.0, remap_max: float = 1.0):
-        """
-        Initialize OSC object.
-        
-        Args:
-            name: Unique identifier for the object
-            address: OSC address (e.g., "/red_dust/object1")
-            host: Target IP address
-            port: Target UDP port
-            remap_min: Minimum output value for remapping (default: 0.0)
-            remap_max: Maximum output value for remapping (default: 1.0)
-        """
-        self.name = name
-        self.address = address
-        self.host = host
-        self.port = port
-        self.remap_min = remap_min
-        self.remap_max = remap_max
-        self.streaming_enabled = False  # Per-object streaming state
-        self._client = None
-        
-        # Create OSC client
-        try:
-            self._client = UDPClient(host, port)
-            logger.info(f"Created OSC client for {name} at {host}:{port}")
-        except Exception as e:
-            logger.error(f"Failed to create OSC client for {name}: {e}")
-    
-    def remap_value(self, normalized_value: float) -> float:
-        """
-        Remap normalized value (0-1) to output range.
-        
-        Args:
-            normalized_value: Normalized input value (0..1)
-        
-        Returns:
-            Remapped value in range [remap_min, remap_max]
-        """
-        # Clamp normalized value to 0..1
-        normalized_value = max(0.0, min(1.0, normalized_value))
-        
-        # Handle edge case where min == max
-        if self.remap_max == self.remap_min:
-            return self.remap_min
-        
-        # Linear remapping: output = min + (normalized * (max - min))
-        return self.remap_min + (normalized_value * (self.remap_max - self.remap_min))
-    
-    def send(self, normalized_value: float, timestamp: UTCDateTime) -> float:
-        """
-        Send OSC message with remapped value.
-        
-        Args:
-            normalized_value: Normalized value (0..1) from waveform model
-            timestamp: UTC timestamp
-        
-        Returns:
-            Remapped value that was sent (for UI updates)
-        """
-        if not self.streaming_enabled or self._client is None:
-            return None
-        
-        # Apply remapping
-        output_value = self.remap_value(normalized_value)
-        
-        # Format timestamp as ISO8601 UTC string
-        timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        
-        try:
-            # Send message with two arguments: value (float) and timestamp (string)
-            from pythonosc.osc_message_builder import OscMessageBuilder
-            builder = OscMessageBuilder(self.address)
-            builder.add_arg(output_value)
-            builder.add_arg(timestamp_str)
-            msg = builder.build()
-            self._client.send(msg)
-            return output_value
-        except Exception as e:
-            logger.error(f"Failed to send OSC message for {self.name}: {e}")
-            return None
-    
-    def close(self) -> None:
-        """Close OSC client."""
-        self._client = None
+# Backward compatibility: export OSCObject from here
+__all__ = ['OSCManager', 'OSCObject', 'SerialObject']
 
 
 class OSCManager(QObject):
-    """Manages OSC streaming to multiple interactive objects."""
+    """Manages streaming to multiple interactive objects (OSC and Serial)."""
     
     # Signal emitted when streaming state changes (global)
     streaming_state_changed = Signal(bool)  # True when streaming starts
@@ -114,6 +32,9 @@ class OSCManager(QObject):
     
     # Signal emitted when object value is updated (for UI display)
     object_value_updated = Signal(str, float)  # Emits (object_name, remapped_value)
+    
+    # Signal emitted when object connection state changes (for Serial objects)
+    object_connection_state_changed = Signal(str, bool)  # Emits (object_name, connected)
     
     def __init__(self, waveform_model=None, playback_controller=None):
         """
@@ -126,13 +47,13 @@ class OSCManager(QObject):
         super().__init__()
         self._waveform_model = waveform_model
         self._playback_controller = playback_controller
-        self._objects: Dict[str, OSCObject] = {}
+        self._objects: Dict[str, InteractiveObject] = {}
         self._streaming = False
         
         # Timer for 60 Hz output (always running when objects are streaming)
         self._timer = QTimer()
         self._timer.timeout.connect(self._send_frame)
-        self._timer.setInterval(OSC_INTERVAL_MS)
+        self._timer.setInterval(OUTPUT_INTERVAL_MS)
     
     def set_waveform_model(self, waveform_model) -> None:
         """
@@ -152,7 +73,7 @@ class OSCManager(QObject):
         """
         self._playback_controller = playback_controller
     
-    def add_object(self, name: str, address: str, host: str, port: int, remap_min: float = 0.0, remap_max: float = 1.0) -> OSCObject:
+    def add_osc_object(self, name: str, address: str, host: str, port: int, remap_min: float = 0.0, remap_max: float = 1.0) -> OSCObject:
         """
         Add a new OSC object.
         
@@ -181,36 +102,100 @@ class OSCManager(QObject):
         logger.info(f"Added OSC object: {name}")
         return obj
     
+    def add_serial_object(self, name: str, port: str, baudrate: int = None, remap_min: float = 0.0, remap_max: float = 1.0) -> SerialObject:
+        """
+        Add a new Serial object.
+        
+        Args:
+            name: Unique identifier
+            port: Serial port (e.g., "COM3" on Windows, "/dev/ttyUSB0" on Linux)
+            baudrate: Baud rate for serial communication (default: from settings)
+            remap_min: Minimum output value for remapping (default: 0.0)
+            remap_max: Maximum output value for remapping (default: 1.0)
+        
+        Returns:
+            SerialObject instance
+        """
+        if name in self._objects:
+            logger.warning(f"Object {name} already exists, replacing it")
+            self.remove_object(name)
+        
+        if baudrate is None:
+            baudrate = SERIAL_BAUDRATE
+        
+        obj = SerialObject(name, port, baudrate, remap_min, remap_max)
+        self._objects[name] = obj
+        
+        # Emit connection state signal
+        self.object_connection_state_changed.emit(name, obj.is_connected())
+        
+        # Start timer if not already running (needed for per-object streaming)
+        if not self._timer.isActive():
+            self._timer.start()
+        
+        logger.info(f"Added Serial object: {name}")
+        return obj
+    
+    def add_object(self, name: str, address: str, host: str, port: int, remap_min: float = 0.0, remap_max: float = 1.0) -> OSCObject:
+        """
+        Add a new OSC object (backward compatibility method).
+        
+        Args:
+            name: Unique identifier
+            address: OSC address
+            host: Target IP address
+            port: Target UDP port
+            remap_min: Minimum output value for remapping (default: 0.0)
+            remap_max: Maximum output value for remapping (default: 1.0)
+        
+        Returns:
+            OSCObject instance
+        """
+        return self.add_osc_object(name, address, host, port, remap_min, remap_max)
+    
     def remove_object(self, name: str) -> None:
         """
-        Remove an OSC object.
+        Remove an object.
         
         Args:
             name: Object identifier
         """
         if name in self._objects:
-            self._objects[name].close()
+            obj = self._objects[name]
+            
+            # Stop streaming if active
+            if obj.streaming_enabled:
+                self.stop_object_streaming(name)
+            
+            # Close connection properly
+            obj.close()
+            
+            # Emit connection state change for Serial objects
+            from core.serial_object import SerialObject
+            if isinstance(obj, SerialObject):
+                self.object_connection_state_changed.emit(name, False)
+            
             del self._objects[name]
-            logger.info(f"Removed OSC object: {name}")
+            logger.info(f"Removed object: {name}")
     
-    def get_object(self, name: str) -> Optional[OSCObject]:
+    def get_object(self, name: str) -> Optional[InteractiveObject]:
         """
-        Get OSC object by name.
+        Get object by name.
         
         Args:
             name: Object identifier
         
         Returns:
-            OSCObject or None if not found
+            InteractiveObject or None if not found
         """
         return self._objects.get(name)
     
-    def get_all_objects(self) -> Dict[str, OSCObject]:
+    def get_all_objects(self) -> Dict[str, InteractiveObject]:
         """
-        Get all OSC objects.
+        Get all objects.
         
         Returns:
-            Dictionary of name -> OSCObject
+            Dictionary of name -> InteractiveObject
         """
         return self._objects.copy()
     
@@ -236,8 +221,23 @@ class OSCManager(QObject):
             name: Object identifier
         """
         if name in self._objects:
-            if not self._objects[name].streaming_enabled:
-                self._objects[name].streaming_enabled = True
+            obj = self._objects[name]
+            
+            # For Serial objects, check connection and try to reconnect if needed
+            if isinstance(obj, SerialObject):
+                if not obj.is_connected():
+                    logger.warning(f"Serial object {name} is not connected, attempting to reconnect...")
+                    if not obj.reconnect():
+                        logger.error(f"Cannot start streaming for {name}: Serial connection failed")
+                        # Emit connection state change
+                        self.object_connection_state_changed.emit(name, False)
+                        return
+                    else:
+                        # Connection restored
+                        self.object_connection_state_changed.emit(name, True)
+            
+            if not obj.streaming_enabled:
+                obj.streaming_enabled = True
                 self.object_streaming_state_changed.emit(name, True)
                 logger.info(f"Started streaming for object: {name}")
                 
@@ -269,19 +269,10 @@ class OSCManager(QObject):
                 # Send zero value
                 obj = self._objects[name]
                 normalized_zero = 0.0
-                remapped_zero = obj.remap_value(normalized_zero)
-                try:
-                    from pythonosc.osc_message_builder import OscMessageBuilder
-                    builder = OscMessageBuilder(obj.address)
-                    builder.add_arg(remapped_zero)
-                    builder.add_arg(current_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
-                    msg = builder.build()
-                    if obj._client:
-                        obj._client.send(msg)
-                    # Emit value update signal for UI
+                remapped_zero = obj.send(normalized_zero, current_time)
+                # Emit value update signal for UI
+                if remapped_zero is not None:
                     self.object_value_updated.emit(name, remapped_zero)
-                except Exception as e:
-                    logger.error(f"Failed to send stop message for {name}: {e}")
                 
                 # Stop timer if no objects are streaming
                 if not any(obj.streaming_enabled for obj in self._objects.values()):
@@ -343,17 +334,7 @@ class OSCManager(QObject):
         for obj in self._objects.values():
             if obj.streaming_enabled:
                 normalized_zero = 0.0
-                remapped_zero = obj.remap_value(normalized_zero)
-                try:
-                    from pythonosc.osc_message_builder import OscMessageBuilder
-                    builder = OscMessageBuilder(obj.address)
-                    builder.add_arg(remapped_zero)
-                    builder.add_arg(current_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
-                    msg = builder.build()
-                    if obj._client:
-                        obj._client.send(msg)
-                except Exception as e:
-                    logger.error(f"Failed to send stop message for {obj.name}: {e}")
+                obj.send(normalized_zero, current_time)
         
         self._streaming = False
         self.streaming_state_changed.emit(False)

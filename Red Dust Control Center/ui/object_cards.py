@@ -1,19 +1,20 @@
 """
-Object Cards widget for managing OSC output objects.
+Object Cards widget for managing interactive objects (OSC and Serial).
 """
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QDoubleSpinBox, QPushButton, 
-                               QScrollArea, QFrame, QProgressBar)
+                               QScrollArea, QFrame, QProgressBar, QSpinBox,
+                               QComboBox)
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QPalette
 import logging
-from settings import STREAMING_PORT, INTERACTIVE_OBJECTS_HEIGHT, OBJECT_CARD_WIDTH
+from settings import STREAMING_PORT, SERIAL_BAUDRATE, INTERACTIVE_OBJECTS_HEIGHT, OBJECT_CARD_WIDTH
 
 logger = logging.getLogger(__name__)
 
 
 class ObjectCard(QFrame):
-    """Individual card widget for an OSC object."""
+    """Individual card widget for an interactive object (OSC or Serial)."""
     
     # Signals
     removed = Signal(str)  # Emits object name
@@ -21,16 +22,18 @@ class ObjectCard(QFrame):
     streaming_started = Signal(str)  # Emits object name when streaming starts
     streaming_stopped = Signal(str)  # Emits object name when streaming stops
     
-    def __init__(self, name: str, parent=None):
+    def __init__(self, name: str, communication_type: str = "OSC", parent=None):
         """
         Initialize ObjectCard.
         
         Args:
             name: Unique identifier for the object
+            communication_type: "OSC" or "Serial"
             parent: Parent widget
         """
         super().__init__(parent)
         self._name = name
+        self._communication_type = communication_type
         self._streaming = False
         self._active_channel = None
         self._channel_colors = {}  # Cache of channel to color mapping
@@ -47,11 +50,15 @@ class ObjectCard(QFrame):
         layout.setSpacing(8)
         layout.setContentsMargins(10, 10, 10, 10)
         
-        # Header with name and remove button
+        # Header with name, type, and remove button
         header_layout = QHBoxLayout()
         name_label = QLabel(f"<b>{self._name}</b>")
         name_label.setStyleSheet("font-size: 12pt;")
         header_layout.addWidget(name_label)
+        
+        type_label = QLabel(f"<i>({self._communication_type})</i>")
+        type_label.setStyleSheet("font-size: 9pt; color: grey;")
+        header_layout.addWidget(type_label)
         header_layout.addStretch()
         
         remove_button = QPushButton("✕")
@@ -61,28 +68,40 @@ class ObjectCard(QFrame):
         header_layout.addWidget(remove_button)
         layout.addLayout(header_layout)
         
-        # OSC Address and IP Address side by side
-        address_ip_layout = QHBoxLayout()
-        
-        # OSC Address (left)
-        osc_address_layout = QVBoxLayout()
-        osc_address_layout.addWidget(QLabel("OSC Address:"))
-        self.address_edit = QLineEdit()
-        self.address_edit.setText(f"/red_dust/{self._name.lower().replace(' ', '_')}")
-        self.address_edit.textChanged.connect(lambda: self.config_changed.emit(self._name))
-        osc_address_layout.addWidget(self.address_edit)
-        address_ip_layout.addLayout(osc_address_layout)
-        
-        # IP Address (right)
-        ip_address_layout = QVBoxLayout()
-        ip_address_layout.addWidget(QLabel("IP Address:"))
-        self.host_edit = QLineEdit()
-        self.host_edit.setText("127.0.0.1")
-        self.host_edit.textChanged.connect(lambda: self.config_changed.emit(self._name))
-        ip_address_layout.addWidget(self.host_edit)
-        address_ip_layout.addLayout(ip_address_layout)
-        
-        layout.addLayout(address_ip_layout)
+        # Communication-specific fields
+        if self._communication_type == "OSC":
+            # OSC Address and IP Address side by side
+            address_ip_layout = QHBoxLayout()
+            
+            # OSC Address (left)
+            osc_address_layout = QVBoxLayout()
+            osc_address_layout.addWidget(QLabel("OSC Address:"))
+            self.address_edit = QLineEdit()
+            self.address_edit.setText(f"/red_dust/{self._name.lower().replace(' ', '_')}")
+            self.address_edit.textChanged.connect(lambda: self.config_changed.emit(self._name))
+            osc_address_layout.addWidget(self.address_edit)
+            address_ip_layout.addLayout(osc_address_layout)
+            
+            # IP Address (right)
+            ip_address_layout = QVBoxLayout()
+            ip_address_layout.addWidget(QLabel("IP Address:"))
+            self.host_edit = QLineEdit()
+            self.host_edit.setText("127.0.0.1")
+            self.host_edit.textChanged.connect(lambda: self.config_changed.emit(self._name))
+            ip_address_layout.addWidget(self.host_edit)
+            address_ip_layout.addLayout(ip_address_layout)
+            
+            layout.addLayout(address_ip_layout)
+        else:  # Serial
+            # Serial Port (dropdown with available ports)
+            port_layout = QVBoxLayout()
+            port_layout.addWidget(QLabel("Serial Port:"))
+            self.port_combo = QComboBox()
+            self.port_combo.setEditable(True)  # Allow typing custom port names
+            self._populate_serial_ports()
+            self.port_combo.currentTextChanged.connect(self._on_serial_port_changed)
+            port_layout.addWidget(self.port_combo)
+            layout.addLayout(port_layout)
         
         # Remap Min and Max side by side
         remap_layout = QHBoxLayout()
@@ -117,6 +136,10 @@ class ObjectCard(QFrame):
         streaming_controls_layout = QHBoxLayout()
         self.start_button = QPushButton("Start")
         self.start_button.clicked.connect(self._on_start_clicked)
+        # For Serial objects, Start button will be enabled/disabled based on connection state
+        # For OSC objects, Start button is enabled by default
+        if self._communication_type == "Serial":
+            self.start_button.setEnabled(False)  # Will be enabled when connection is established
         streaming_controls_layout.addWidget(self.start_button, 1)  # Stretch factor to fill width
         
         self.stop_button = QPushButton("Stop")
@@ -173,6 +196,76 @@ class ObjectCard(QFrame):
         # Update background color when widget becomes visible (palette is fully initialized)
         self._update_background_color()
     
+    def _populate_serial_ports(self) -> None:
+        """Populate serial port dropdown with available ports."""
+        try:
+            import serial.tools.list_ports
+            ports = serial.tools.list_ports.comports()
+            available_ports = [port.device for port in ports]
+            
+            # Clear and add available ports
+            self.port_combo.clear()
+            self.port_combo.addItems(available_ports)
+            
+            # Add placeholder text - don't select any port by default
+            if not available_ports:
+                self.port_combo.addItem("Select port...")
+                self.port_combo.setCurrentText("Select port...")
+            else:
+                # Add placeholder as first item
+                self.port_combo.insertItem(0, "Select port...")
+                self.port_combo.setCurrentIndex(0)  # Select placeholder
+        except Exception as e:
+            logger.error(f"Failed to list serial ports: {e}")
+            # Fallback: just add placeholder
+            self.port_combo.clear()
+            self.port_combo.addItem("Select port...")
+            self.port_combo.setCurrentText("Select port...")
+    
+    def _set_serial_port(self, port_name: str) -> None:
+        """
+        Set serial port, adding it to the list if it's not already there.
+        This preserves saved port names even if they're not currently available.
+        
+        Args:
+            port_name: Port name to set
+        """
+        # Check if port is already in the combo box
+        current_items = [self.port_combo.itemText(i) for i in range(self.port_combo.count())]
+        
+        if port_name not in current_items:
+            # Add the port to the list (preserves saved port names)
+            self.port_combo.addItem(port_name)
+        
+        # Set the current text (but don't trigger port opening if it's a placeholder)
+        if port_name and port_name != "Select port...":
+            self.port_combo.setCurrentText(port_name)
+        else:
+            # If it's a placeholder or empty, just set it without triggering
+            self.port_combo.blockSignals(True)
+            self.port_combo.setCurrentText("Select port...")
+            self.port_combo.blockSignals(False)
+    
+    def _on_serial_port_changed(self, port_name: str) -> None:
+        """
+        Handle serial port selection change.
+        Attempts to open the port when user selects one.
+        
+        Args:
+            port_name: Selected port name
+        """
+        if self._communication_type != "Serial":
+            return
+        
+        # Ignore placeholder text
+        if port_name == "Select port..." or not port_name or port_name.strip() == "":
+            # Emit config changed but don't try to open port
+            self.config_changed.emit(self._name)
+            return
+        
+        # Emit config changed to update the SerialObject
+        self.config_changed.emit(self._name)
+    
     def _validate_remapping(self) -> None:
         """Validate that remap_min < remap_max."""
         min_val = self.remap_min_spinbox.value()
@@ -207,6 +300,26 @@ class ObjectCard(QFrame):
                 self._on_start_clicked()
             else:
                 self._on_stop_clicked()
+    
+    def set_connection_state(self, connected: bool) -> None:
+        """
+        Set connection state (for Serial objects).
+        Updates button states based on connection availability.
+        
+        Args:
+            connected: True if connected, False if disconnected
+        """
+        if self._communication_type == "Serial":
+            # If not connected, disable Start button and enable Stop button only if streaming
+            if not connected:
+                self.start_button.setEnabled(False)
+                # If streaming, stop it
+                if self._streaming:
+                    self._on_stop_clicked()
+            else:
+                # If connected, enable Start button if not streaming
+                if not self._streaming:
+                    self.start_button.setEnabled(True)
     
     def set_active_channel(self, channel: str) -> None:
         """
@@ -315,17 +428,25 @@ class ObjectCard(QFrame):
         Get current configuration.
         
         Returns:
-            Dictionary with address, host, port, remap_min, remap_max, streaming_enabled
+            Dictionary with type-specific configuration, remap_min, remap_max, streaming_enabled
         """
-        return {
+        config = {
             'name': self._name,
-            'address': self.address_edit.text(),
-            'host': self.host_edit.text(),
-            'port': STREAMING_PORT,  # Use port from settings
+            'type': self._communication_type,
             'remap_min': self.remap_min_spinbox.value(),
             'remap_max': self.remap_max_spinbox.value(),
             'streaming_enabled': self._streaming
         }
+        
+        if self._communication_type == "OSC":
+            config['address'] = self.address_edit.text()
+            config['host'] = self.host_edit.text()
+            config['port'] = STREAMING_PORT  # Use default from settings
+        else:  # Serial
+            config['port'] = self.port_combo.currentText()
+            config['baudrate'] = SERIAL_BAUDRATE  # Use default from settings
+        
+        return config
     
     def set_config(self, config: dict) -> None:
         """
@@ -334,11 +455,21 @@ class ObjectCard(QFrame):
         Args:
             config: Configuration dictionary
         """
-        if 'address' in config:
-            self.address_edit.setText(config['address'])
-        if 'host' in config:
-            self.host_edit.setText(config['host'])
-        # Port is always STREAMING_PORT from settings, no need to set it
+        # Update communication type if provided
+        if 'type' in config and config['type'] != self._communication_type:
+            logger.warning(f"Cannot change communication type from {self._communication_type} to {config['type']}")
+        
+        if self._communication_type == "OSC":
+            if 'address' in config:
+                self.address_edit.setText(config['address'])
+            if 'host' in config:
+                self.host_edit.setText(config['host'])
+            # Port is always STREAMING_PORT from settings, no need to set it
+        else:  # Serial
+            if 'port' in config:
+                self._set_serial_port(config['port'])
+            # Baudrate is always SERIAL_BAUDRATE from settings, no need to set it
+        
         if 'remap_min' in config:
             self.remap_min_spinbox.setValue(config['remap_min'])
         elif 'scale' in config:
@@ -378,9 +509,13 @@ class ObjectCardsContainer(QWidget):
         header_layout.addWidget(QLabel("<b>Interactive Objects</b>"))
         header_layout.addStretch()
         
-        add_button = QPushButton("Add Object")
-        add_button.clicked.connect(lambda: self._add_object())  # Use lambda to ignore signal argument
-        header_layout.addWidget(add_button)
+        add_osc_button = QPushButton("Add OSC Object")
+        add_osc_button.clicked.connect(lambda: self._add_object("OSC"))  # Use lambda to ignore signal argument
+        header_layout.addWidget(add_osc_button)
+        
+        add_serial_button = QPushButton("Add Serial Object")
+        add_serial_button.clicked.connect(lambda: self._add_object("Serial"))  # Use lambda to ignore signal argument
+        header_layout.addWidget(add_serial_button)
         layout.addLayout(header_layout)
         
         # Scroll area for cards (horizontal scrolling)
@@ -404,24 +539,26 @@ class ObjectCardsContainer(QWidget):
         
         self.setLayout(layout)
     
-    def _add_object(self, name: str = None) -> ObjectCard:
+    def _add_object(self, communication_type: str = "OSC", name: str = None) -> ObjectCard:
         """
         Add a new object card.
         
         Args:
+            communication_type: "OSC" or "Serial"
             name: Object name (auto-generated if None)
         
         Returns:
             ObjectCard instance
         """
         if name is None:
-            # Generate unique name
+            # Generate unique name based on type
             counter = 1
-            while f"Object {counter}" in self._cards:
+            base_name = f"{communication_type} Object"
+            while f"{base_name} {counter}" in self._cards:
                 counter += 1
-            name = f"Object {counter}"
+            name = f"{base_name} {counter}"
         
-        card = ObjectCard(name, self)
+        card = ObjectCard(name, communication_type, self)
         card.removed.connect(self._remove_object)
         card.config_changed.connect(self.object_config_changed.emit)
         card.streaming_started.connect(self._on_streaming_started)
@@ -432,7 +569,7 @@ class ObjectCardsContainer(QWidget):
         self._cards[name] = card
         
         self.object_added.emit(name)
-        logger.info(f"Added object card: {name}")
+        logger.info(f"Added {communication_type} object card: {name}")
         return card
     
     def _on_streaming_started(self, name: str) -> None:
