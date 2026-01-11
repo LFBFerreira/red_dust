@@ -7,8 +7,12 @@ from obspy import Stream, UTCDateTime
 import pyqtgraph as pg
 import numpy as np
 import logging
+import settings
 
 logger = logging.getLogger(__name__)
+
+# Waveform display constants
+CHANNEL_LINE_WIDTH = 1  # Line width for all channels (in pixels)
 
 
 class WaveformViewer(QWidget):
@@ -25,6 +29,16 @@ class WaveformViewer(QWidget):
         self._playhead_line = None
         self._loop_region = None
         self._plot_items = {}
+        # Cache for pre-calculated channel data (full and downsampled)
+        # Format: {channel_id: {'times_full': array, 'data_full': array, 
+        #                        'times_downsampled': array, 'data_downsampled': array,
+        #                        'npts_original': int, 'npts_downsampled': int,
+        #                        'x_min': float, 'x_max': float,
+        #                        'y_min': float, 'y_max': float}}
+        self._channel_data_cache = {}
+        # Overall min/max across all channels (for panning limits)
+        self._overall_x_range = None  # (min, max)
+        self._overall_y_range = None  # (min, max)
         self._setup_ui()
     
     def _setup_ui(self):
@@ -57,6 +71,125 @@ class WaveformViewer(QWidget):
         layout.addWidget(self.plot_widget, 1)  # Stretch factor to fill remaining space
         self.setLayout(layout)
     
+    def _precalculate_channel_data(self, stream: Stream) -> None:
+        """
+        Pre-calculate full and downsampled data for all channels.
+        
+        Args:
+            stream: ObsPy Stream containing waveform data
+        """
+        import time
+        precalc_start = time.time()
+        
+        logger.info(f"[DEBUG] Pre-calculating channel data for {len(stream) if stream else 0} traces...")
+        
+        # Clear existing cache
+        self._channel_data_cache.clear()
+        
+        if stream is None or len(stream) == 0:
+            return
+        
+        # Group traces by channel
+        channels = {}
+        for trace in stream:
+            channel_id = f"{trace.stats.location}.{trace.stats.channel}"
+            if channel_id not in channels:
+                channels[channel_id] = []
+            channels[channel_id].append(trace)
+        
+        max_points = settings.WAVEFORM_INACTIVE_CHANNEL_MAX_POINTS
+        
+        # Collect overall min/max values across all channels
+        all_x_mins = []
+        all_x_maxs = []
+        all_y_mins = []
+        all_y_maxs = []
+        
+        for channel_id, traces in channels.items():
+            channel_precalc_start = time.time()
+            
+            # Merge traces if multiple
+            if len(traces) > 1:
+                temp_stream = Stream(traces)
+                temp_stream.merge(method=1)  # Fill gaps with NaN
+                trace = temp_stream[0] if len(temp_stream) > 0 else traces[0]
+            else:
+                trace = traces[0]
+            
+            npts_original = len(trace.data)
+            start_timestamp = trace.stats.starttime.timestamp
+            sample_rate = trace.stats.sampling_rate
+            
+            # Calculate full resolution data
+            times_full = start_timestamp + np.arange(npts_original) / sample_rate
+            data_full = trace.data.copy()
+            
+            # Calculate channel-specific min/max
+            valid_data = data_full[~np.isnan(data_full)]
+            if len(valid_data) > 0:
+                channel_y_min = float(np.nanmin(valid_data))
+                channel_y_max = float(np.nanmax(valid_data))
+            else:
+                channel_y_min = 0.0
+                channel_y_max = 0.0
+            
+            channel_x_min = float(times_full[0])
+            channel_x_max = float(times_full[-1])
+            
+            # Collect for overall min/max
+            all_x_mins.append(channel_x_min)
+            all_x_maxs.append(channel_x_max)
+            all_y_mins.append(channel_y_min)
+            all_y_maxs.append(channel_y_max)
+            
+            # Calculate downsampled data if needed
+            if npts_original > max_points:
+                downsample_factor = int(np.ceil(npts_original / max_points))
+                data_downsampled = data_full[::downsample_factor]
+                times_downsampled = start_timestamp + np.arange(0, npts_original, downsample_factor) / sample_rate
+                # Ensure arrays have same length
+                min_len = min(len(times_downsampled), len(data_downsampled))
+                times_downsampled = times_downsampled[:min_len]
+                data_downsampled = data_downsampled[:min_len]
+                npts_downsampled = min_len
+            else:
+                # No downsampling needed
+                times_downsampled = times_full
+                data_downsampled = data_full
+                npts_downsampled = npts_original
+            
+            # Store in cache
+            self._channel_data_cache[channel_id] = {
+                'times_full': times_full,
+                'data_full': data_full,
+                'times_downsampled': times_downsampled,
+                'data_downsampled': data_downsampled,
+                'npts_original': npts_original,
+                'npts_downsampled': npts_downsampled,
+                'x_min': channel_x_min,
+                'x_max': channel_x_max,
+                'y_min': channel_y_min,
+                'y_max': channel_y_max
+            }
+            
+            channel_precalc_time = time.time() - channel_precalc_start
+            if npts_downsampled < npts_original:
+                logger.debug(f"[DEBUG] Pre-calculated {channel_id}: {npts_original:,} -> {npts_downsampled:,} points in {channel_precalc_time:.2f}s")
+            else:
+                logger.debug(f"[DEBUG] Pre-calculated {channel_id}: {npts_original:,} points (no downsampling) in {channel_precalc_time:.2f}s")
+        
+        # Calculate overall min/max across all channels
+        if all_x_mins and all_x_maxs and all_y_mins and all_y_maxs:
+            self._overall_x_range = (min(all_x_mins), max(all_x_maxs))
+            self._overall_y_range = (min(all_y_mins), max(all_y_maxs))
+            logger.debug(f"[DEBUG] Overall ranges: X=[{self._overall_x_range[0]:.2f}, {self._overall_x_range[1]:.2f}], Y=[{self._overall_y_range[0]:.2f}, {self._overall_y_range[1]:.2f}]")
+        else:
+            self._overall_x_range = None
+            self._overall_y_range = None
+        
+        precalc_time = time.time() - precalc_start
+        logger.info(f"[DEBUG] Pre-calculation complete for {len(self._channel_data_cache)} channels in {precalc_time:.2f}s")
+    
     def update_waveform(self, stream: Stream, active_channel: str = None) -> None:
         """
         Update waveform display with new stream data.
@@ -70,7 +203,30 @@ class WaveformViewer(QWidget):
         
         logger.info(f"[DEBUG] WaveformViewer.update_waveform called with {len(stream) if stream else 0} traces, active_channel={active_channel}")
         
+        # Check if stream has changed (need to recalculate cache)
+        # Compare by checking if channel IDs match cached channels
+        stream_changed = False
+        if stream is None:
+            if len(self._channel_data_cache) > 0:
+                stream_changed = True
+        elif self._stream is None:
+            stream_changed = True
+        else:
+            # Check if channels match by comparing channel IDs
+            current_channels = set()
+            for trace in stream:
+                channel_id = f"{trace.stats.location}.{trace.stats.channel}"
+                current_channels.add(channel_id)
+            cached_channels = set(self._channel_data_cache.keys())
+            if current_channels != cached_channels:
+                stream_changed = True
+        
+        if stream_changed:
+            logger.debug(f"[DEBUG] Stream changed, pre-calculating channel data...")
+            self._precalculate_channel_data(stream)
+        
         self._stream = stream
+        old_active_channel = self._active_channel
         self._active_channel = active_channel
         
         # Clear existing plots
@@ -83,122 +239,138 @@ class WaveformViewer(QWidget):
         clear_time = time.time() - clear_start
         logger.debug(f"[DEBUG] Plot clearing took {clear_time:.2f}s")
         
-        if stream is None or len(stream) == 0:
+        if stream is None or len(stream) == 0 or len(self._channel_data_cache) == 0:
             logger.warning(f"[DEBUG] No stream data to display")
             return
         
-        # Group traces by channel
-        logger.debug(f"[DEBUG] Grouping traces by channel...")
-        group_start = time.time()
-        channels = {}
-        for trace in stream:
-            channel_id = f"{trace.stats.location}.{trace.stats.channel}"
-            if channel_id not in channels:
-                channels[channel_id] = []
-            channels[channel_id].append(trace)
-        group_time = time.time() - group_start
-        logger.info(f"[DEBUG] Grouped {len(stream)} traces into {len(channels)} channels in {group_time:.2f}s")
+        # Plot each channel using cached data
+        channel_colors = ['#00d4ff', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']  # Colors for channels
+        # Create consistent color mapping based on sorted channel IDs
+        sorted_channel_ids = sorted(self._channel_data_cache.keys())
+        channel_color_map = {channel_id: channel_colors[i % len(channel_colors)] for i, channel_id in enumerate(sorted_channel_ids)}
         
-        # Plot each channel and collect Y values for limits
-        active_colors = ['#00d4ff', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']  # Bright colors for active channel
-        color_idx = 0
-        all_y_values = []  # Collect all Y values to find min/max
+        total_data_points = 0  # Track total data points across all channels
         
         plot_start = time.time()
-        for channel_id, traces in channels.items():
+        for channel_id, channel_data in self._channel_data_cache.items():
             channel_start = time.time()
-            logger.debug(f"[DEBUG] Processing channel {channel_id} with {len(traces)} trace(s)...")
             
-            # Merge traces if multiple (ObsPy handles this)
-            if len(traces) > 1:
-                merge_start = time.time()
-                # Use ObsPy's merge method
-                temp_stream = Stream(traces)
-                temp_stream.merge(method=1)  # Fill gaps with NaN
-                trace = temp_stream[0] if len(temp_stream) > 0 else traces[0]
-                merge_time = time.time() - merge_start
-                logger.debug(f"[DEBUG] Merged {len(traces)} traces for {channel_id} in {merge_time:.2f}s")
-            else:
-                trace = traces[0]
-            
-            # Prepare data
-            data_prep_start = time.time()
-            npts = len(trace.data)
-            logger.debug(f"[DEBUG] Preparing data for {channel_id}: {npts:,} samples...")
-            
-            # Optimize time array creation - use vectorized operations
-            start_timestamp = trace.stats.starttime.timestamp
-            sample_rate = trace.stats.sampling_rate
-            times = start_timestamp + np.arange(npts) / sample_rate
-            
-            data = trace.data
-            data_prep_time = time.time() - data_prep_start
-            logger.debug(f"[DEBUG] Data preparation for {channel_id} took {data_prep_time:.2f}s")
-            
-            # Collect Y values (filter out NaN values)
-            valid_data = data[~np.isnan(data)]
-            if len(valid_data) > 0:
-                # Convert to list to avoid numpy array issues when extending
-                all_y_values.extend(valid_data.tolist())
-            
-            # Choose color and pen width
             is_active = (channel_id == active_channel)
+            
+            # Skip inactive channels if setting is enabled
+            if settings.WAVEFORM_SHOW_ONLY_ACTIVE_CHANNEL and not is_active:
+                continue
+            
+            # Select appropriate data version
             if is_active:
-                # Active channel: bright color and thicker line
-                color = active_colors[color_idx % len(active_colors)]
-                width = 4
+                times = channel_data['times_full']
+                data = channel_data['data_full']
+                npts = channel_data['npts_original']
             else:
-                # Non-active channels: muted gray color and thin line
-                color = '#666666'  # Muted gray
-                width = 1
+                times = channel_data['times_downsampled']
+                data = channel_data['data_downsampled']
+                npts = channel_data['npts_downsampled']
+            
+            total_data_points += npts
+            
+            # Choose color - each channel gets a consistent color based on its ID
+            color = channel_color_map.get(channel_id, '#666666')
+            
+            # All channels use the same line width
+            width = CHANNEL_LINE_WIDTH
             
             # Plot
             plot_item_start = time.time()
             plot_item = self.plot_widget.plot(times, data, pen=pg.mkPen(color=color, width=width))
             self._plot_items[channel_id] = plot_item
             plot_item_time = time.time() - plot_item_start
-            logger.debug(f"[DEBUG] Plotting {channel_id} took {plot_item_time:.2f}s")
+            logger.debug(f"[DEBUG] Plotting {channel_id} took {plot_item_time:.2f}s ({npts:,} points)")
             
             channel_time = time.time() - channel_start
-            logger.info(f"[DEBUG] Channel {channel_id} complete in {channel_time:.2f}s total")
-            
-            color_idx += 1
+            if is_active:
+                logger.info(f"[DEBUG] Channel {channel_id} (active) complete in {channel_time:.2f}s total ({npts:,} points, full resolution)")
+            else:
+                logger.info(f"[DEBUG] Channel {channel_id} (inactive) complete in {channel_time:.2f}s total ({npts:,} points, downsampled)")
         
         plot_time = time.time() - plot_start
         logger.info(f"[DEBUG] All channels plotted in {plot_time:.2f}s")
+        logger.info(f"[DEBUG] Total data points added to waveform viewer: {total_data_points:,} points across {len(self._channel_data_cache)} channels")
         
         # Add playhead line and set X/Y limits based on data
         limits_start = time.time()
-        if len(stream) > 0:
+        if len(stream) > 0 and len(self._channel_data_cache) > 0:
             trace = stream[0]
-            time_range = (trace.stats.starttime.timestamp, trace.stats.endtime.timestamp)
             
-            # Set X limits to prevent panning beyond min and max X values
-            # Use the start and end time of the data as the limits
-            self.plot_widget.plotItem.vb.setLimits(
-                xMin=time_range[0],
-                xMax=time_range[1]
-            )
-            
-            # Set Y limits based on dataset min/max values
-            if len(all_y_values) > 0:
-                y_calc_start = time.time()
-                # Convert to numpy array for efficient min/max calculation
-                y_array = np.array(all_y_values, dtype=np.float64)
-                y_min = float(np.nanmin(y_array))  # Use nanmin to handle any remaining NaN values
-                y_max = float(np.nanmax(y_array))  # Use nanmax to handle any remaining NaN values
-                y_calc_time = time.time() - y_calc_start
-                logger.debug(f"[DEBUG] Y limits calculation took {y_calc_time:.2f}s (min={y_min:.2f}, max={y_max:.2f})")
+            # Set panning limits to overall min/max of all channels
+            if self._overall_x_range is not None and self._overall_y_range is not None:
+                # Add small margins for panning limits
+                x_margin = (self._overall_x_range[1] - self._overall_x_range[0]) * 0.01
+                y_margin = (self._overall_y_range[1] - self._overall_y_range[0]) * 0.05 if self._overall_y_range[1] != self._overall_y_range[0] else abs(self._overall_y_range[1]) * 0.05 if self._overall_y_range[1] != 0 else 1.0
                 
-                # Add a small margin for better visualization
-                y_margin = (y_max - y_min) * 0.05 if y_max != y_min else abs(y_max) * 0.05 if y_max != 0 else 1.0
+                overall_x_min = self._overall_x_range[0] - x_margin
+                overall_x_max = self._overall_x_range[1] + x_margin
+                overall_y_min = self._overall_y_range[0] - y_margin
+                overall_y_max = self._overall_y_range[1] + y_margin
+                
+                # Set panning limits (overall range)
                 self.plot_widget.plotItem.vb.setLimits(
-                    yMin=y_min - y_margin,
-                    yMax=y_max + y_margin
+                    xMin=overall_x_min,
+                    xMax=overall_x_max,
+                    yMin=overall_y_min,
+                    yMax=overall_y_max
                 )
+                logger.debug(f"[DEBUG] Panning limits set to overall range: X=[{overall_x_min:.2f}, {overall_x_max:.2f}], Y=[{overall_y_min:.2f}, {overall_y_max:.2f}]")
+            
+            # Set view range to active channel's range
+            if active_channel and active_channel in self._channel_data_cache:
+                active_channel_data = self._channel_data_cache[active_channel]
+                active_x_min = active_channel_data['x_min']
+                active_x_max = active_channel_data['x_max']
+                active_y_min = active_channel_data['y_min']
+                active_y_max = active_channel_data['y_max']
+                
+                # Add small margins for view range
+                active_x_margin = (active_x_max - active_x_min) * 0.01
+                active_y_margin = (active_y_max - active_y_min) * 0.05 if active_y_max != active_y_min else abs(active_y_max) * 0.05 if active_y_max != 0 else 1.0
+                
+                view_x_min = active_x_min - active_x_margin
+                view_x_max = active_x_max + active_x_margin
+                view_y_min = active_y_min - active_y_margin
+                view_y_max = active_y_max + active_y_margin
+                
+                # Set view range to active channel
+                self.plot_widget.plotItem.vb.setRange(
+                    xRange=(view_x_min, view_x_max),
+                    yRange=(view_y_min, view_y_max),
+                    padding=0
+                )
+                logger.debug(f"[DEBUG] View range set to active channel {active_channel}: X=[{view_x_min:.2f}, {view_x_max:.2f}], Y=[{view_y_min:.2f}, {view_y_max:.2f}]")
+            else:
+                # No active channel or channel not found, use overall range
+                if self._overall_x_range is not None and self._overall_y_range is not None:
+                    x_margin = (self._overall_x_range[1] - self._overall_x_range[0]) * 0.01
+                    y_margin = (self._overall_y_range[1] - self._overall_y_range[0]) * 0.05 if self._overall_y_range[1] != self._overall_y_range[0] else abs(self._overall_y_range[1]) * 0.05 if self._overall_y_range[1] != 0 else 1.0
+                    
+                    view_x_min = self._overall_x_range[0] - x_margin
+                    view_x_max = self._overall_x_range[1] + x_margin
+                    view_y_min = self._overall_y_range[0] - y_margin
+                    view_y_max = self._overall_y_range[1] + y_margin
+                    
+                    self.plot_widget.plotItem.vb.setRange(
+                        xRange=(view_x_min, view_x_max),
+                        yRange=(view_y_min, view_y_max),
+                        padding=0
+                    )
+                    logger.debug(f"[DEBUG] View range set to overall range: X=[{view_x_min:.2f}, {view_x_max:.2f}], Y=[{view_y_min:.2f}, {view_y_max:.2f}]")
+            
+            # Set playhead to start of overall time range
+            if self._overall_x_range is not None:
+                playhead_pos = self._overall_x_range[0]
+            else:
+                playhead_pos = trace.stats.starttime.timestamp
             
             self._playhead_line = pg.InfiniteLine(
-                pos=time_range[0],
+                pos=playhead_pos,
                 angle=90,
                 pen=pg.mkPen(color='r', width=2, style=Qt.PenStyle.DashLine)
             )
@@ -209,11 +381,11 @@ class WaveformViewer(QWidget):
             self.plot_widget.setLabel('bottom', f'Time (UTC from {start_time.strftime("%Y-%m-%d %H:%M:%S")})')
         
         limits_time = time.time() - limits_start
-        logger.debug(f"[DEBUG] Setting limits took {limits_time:.2f}s")
+        logger.debug(f"[DEBUG] Setting limits and resetting view took {limits_time:.2f}s")
         
         total_time = time.time() - update_start
         logger.info(f"[DEBUG] WaveformViewer.update_waveform complete in {total_time:.2f}s total")
-        logger.info(f"Updated waveform display with {len(channels)} channels")
+        logger.info(f"Updated waveform display with {len(self._channel_data_cache)} channels")
     
     def update_playhead(self, timestamp: UTCDateTime) -> None:
         """
