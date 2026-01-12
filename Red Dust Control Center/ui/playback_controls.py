@@ -38,10 +38,10 @@ class PlaybackControls(QWidget):
         # Row 1: Active Channel (left) | Loop label (center) | Time information (right)
         row1 = QHBoxLayout()
         
-        # Active Channel (left) - align left, combo box right next to label
+        # Channel (left) - align left, combo box right next to label
         channel_layout = QHBoxLayout()
         channel_layout.setContentsMargins(0, 0, 0, 0)
-        channel_layout.addWidget(QLabel("Active Channel:"))
+        channel_layout.addWidget(QLabel("Channel:"))
         self.channel_combo = QComboBox()
         self.channel_combo.currentTextChanged.connect(self._on_channel_changed)
         channel_layout.addWidget(self.channel_combo)
@@ -76,12 +76,6 @@ class PlaybackControls(QWidget):
         self.position_slider.setValue(0)
         self.position_slider.valueChanged.connect(self._on_position_slider_changed)
         row2.addWidget(self.position_slider, 1)  # Stretch to fill
-        
-        # Position time display (right)
-        self.position_time_label = QLabel("--:--:--")
-        self.position_time_label.setMinimumWidth(80)
-        self.position_time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        row2.addWidget(self.position_time_label)
         
         layout.addLayout(row2)
         
@@ -135,13 +129,13 @@ class PlaybackControls(QWidget):
         btn_1x.clicked.connect(lambda: self._set_speed_preset(1.0))
         speed_button_layout.addWidget(btn_1x)
         
+        btn_10x = QPushButton("10x")
+        btn_10x.clicked.connect(lambda: self._set_speed_preset(10.0))
+        speed_button_layout.addWidget(btn_10x)
+        
         btn_100x = QPushButton("100x")
         btn_100x.clicked.connect(lambda: self._set_speed_preset(100.0))
         speed_button_layout.addWidget(btn_100x)
-        
-        btn_1000x = QPushButton("1000x")
-        btn_1000x.clicked.connect(lambda: self._set_speed_preset(1000.0))
-        speed_button_layout.addWidget(btn_1000x)
         
         row4.addLayout(speed_button_layout, 1)  # Stretch factor for equal columns
         
@@ -184,8 +178,11 @@ class PlaybackControls(QWidget):
         if raw_value is None or normalized_value is None:
             self.value_label.setText("Raw: -- | Norm: --")
         else:
-            # Format raw value with appropriate precision
-            raw_str = f"{raw_value:.6f}" if abs(raw_value) < 1000 else f"{raw_value:.2f}"
+            # Format raw value: no decimals if whole number, otherwise 4 decimals
+            if raw_value == int(raw_value):
+                raw_str = str(int(raw_value))
+            else:
+                raw_str = f"{raw_value:.4f}".rstrip('0').rstrip('.')
             # Format normalized value to 3 decimal places
             norm_str = f"{normalized_value:.3f}"
             self.value_label.setText(f"Raw: {raw_str} | Norm: {norm_str}")
@@ -283,9 +280,6 @@ class PlaybackControls(QWidget):
             slider_value = int(percentage * 1000)  # 0-1000 range
             slider_value = max(0, min(1000, slider_value))  # Clamp
             self.position_slider.setValue(slider_value)
-        
-        # Update position time label
-        self.position_time_label.setText(self._format_time(current_time))
         
         self._position_slider_updating = False
     

@@ -58,6 +58,30 @@ class WaveformViewer(QWidget):
         self.plot_widget.showGrid(x=True, y=True)
         self.plot_widget.setMouseEnabled(x=True, y=True)
         
+        # Set up X-axis to display time in HH:MM:SS format
+        # Create a custom axis item that formats timestamps as time
+        from pyqtgraph import AxisItem
+        from datetime import datetime, timezone
+        
+        class TimeAxisItem(AxisItem):
+            """Custom axis item that formats Unix timestamps as HH:MM:SS."""
+            
+            def tickStrings(self, values, scale, spacing):
+                """Format tick values as time strings."""
+                strings = []
+                for v in values:
+                    try:
+                        # Convert Unix timestamp to UTC datetime
+                        dt = datetime.fromtimestamp(v, tz=timezone.utc)
+                        # Format as HH:MM:SS
+                        strings.append(dt.strftime("%H:%M:%S"))
+                    except (ValueError, OSError, OverflowError):
+                        strings.append("")
+                return strings
+        
+        # Replace the bottom axis with our custom time axis
+        self.plot_widget.plotItem.setAxisItems({'bottom': TimeAxisItem(orientation='bottom')})
+        
         # Initial X limit (will be updated when data loads)
         self.plot_widget.plotItem.vb.setLimits(xMin=0)
         
@@ -81,7 +105,7 @@ class WaveformViewer(QWidget):
         import time
         precalc_start = time.time()
         
-        logger.info(f"[DEBUG] Pre-calculating channel data for {len(stream) if stream else 0} traces...")
+        logger.info(f"Pre-calculating channel data for {len(stream) if stream else 0} traces...")
         
         # Clear existing cache
         self._channel_data_cache.clear()
@@ -174,21 +198,21 @@ class WaveformViewer(QWidget):
             
             channel_precalc_time = time.time() - channel_precalc_start
             if npts_downsampled < npts_original:
-                logger.debug(f"[DEBUG] Pre-calculated {channel_id}: {npts_original:,} -> {npts_downsampled:,} points in {channel_precalc_time:.2f}s")
+                logger.debug(f"Pre-calculated {channel_id}: {npts_original:,} -> {npts_downsampled:,} points in {channel_precalc_time:.2f}s")
             else:
-                logger.debug(f"[DEBUG] Pre-calculated {channel_id}: {npts_original:,} points (no downsampling) in {channel_precalc_time:.2f}s")
+                logger.debug(f"Pre-calculated {channel_id}: {npts_original:,} points (no downsampling) in {channel_precalc_time:.2f}s")
         
         # Calculate overall min/max across all channels
         if all_x_mins and all_x_maxs and all_y_mins and all_y_maxs:
             self._overall_x_range = (min(all_x_mins), max(all_x_maxs))
             self._overall_y_range = (min(all_y_mins), max(all_y_maxs))
-            logger.debug(f"[DEBUG] Overall ranges: X=[{self._overall_x_range[0]:.2f}, {self._overall_x_range[1]:.2f}], Y=[{self._overall_y_range[0]:.2f}, {self._overall_y_range[1]:.2f}]")
+            logger.debug(f"Overall ranges: X=[{self._overall_x_range[0]:.2f}, {self._overall_x_range[1]:.2f}], Y=[{self._overall_y_range[0]:.2f}, {self._overall_y_range[1]:.2f}]")
         else:
             self._overall_x_range = None
             self._overall_y_range = None
         
         precalc_time = time.time() - precalc_start
-        logger.info(f"[DEBUG] Pre-calculation complete for {len(self._channel_data_cache)} channels in {precalc_time:.2f}s")
+        logger.info(f"Pre-calculation complete for {len(self._channel_data_cache)} channels in {precalc_time:.2f}s")
     
     def update_waveform(self, stream: Stream, active_channel: str = None) -> None:
         """
@@ -201,7 +225,7 @@ class WaveformViewer(QWidget):
         import time
         update_start = time.time()
         
-        logger.info(f"[DEBUG] WaveformViewer.update_waveform called with {len(stream) if stream else 0} traces, active_channel={active_channel}")
+        logger.info(f"WaveformViewer.update_waveform called with {len(stream) if stream else 0} traces, active_channel={active_channel}")
         
         # Check if stream has changed (need to recalculate cache)
         # Compare by checking if channel IDs match cached channels
@@ -222,7 +246,7 @@ class WaveformViewer(QWidget):
                 stream_changed = True
         
         if stream_changed:
-            logger.debug(f"[DEBUG] Stream changed, pre-calculating channel data...")
+            logger.debug(f"Stream changed, pre-calculating channel data...")
             self._precalculate_channel_data(stream)
         
         self._stream = stream
@@ -230,17 +254,17 @@ class WaveformViewer(QWidget):
         self._active_channel = active_channel
         
         # Clear existing plots
-        logger.debug(f"[DEBUG] Clearing existing plots...")
+        logger.debug(f"Clearing existing plots...")
         clear_start = time.time()
         self.plot_widget.clear()
         self._plot_items.clear()
         self._playhead_line = None
         self._loop_region = None
         clear_time = time.time() - clear_start
-        logger.debug(f"[DEBUG] Plot clearing took {clear_time:.2f}s")
+        logger.debug(f"Plot clearing took {clear_time:.2f}s")
         
         if stream is None or len(stream) == 0 or len(self._channel_data_cache) == 0:
-            logger.warning(f"[DEBUG] No stream data to display")
+            logger.warning(f"No stream data to display")
             return
         
         # Plot each channel using cached data
@@ -284,17 +308,17 @@ class WaveformViewer(QWidget):
             plot_item = self.plot_widget.plot(times, data, pen=pg.mkPen(color=color, width=width))
             self._plot_items[channel_id] = plot_item
             plot_item_time = time.time() - plot_item_start
-            logger.debug(f"[DEBUG] Plotting {channel_id} took {plot_item_time:.2f}s ({npts:,} points)")
+            logger.debug(f"Plotting {channel_id} took {plot_item_time:.2f}s ({npts:,} points)")
             
             channel_time = time.time() - channel_start
             if is_active:
-                logger.info(f"[DEBUG] Channel {channel_id} (active) complete in {channel_time:.2f}s total ({npts:,} points, full resolution)")
+                logger.info(f"Channel {channel_id} (active) complete in {channel_time:.2f}s total ({npts:,} points, full resolution)")
             else:
-                logger.info(f"[DEBUG] Channel {channel_id} (inactive) complete in {channel_time:.2f}s total ({npts:,} points, downsampled)")
+                logger.info(f"Channel {channel_id} (inactive) complete in {channel_time:.2f}s total ({npts:,} points, downsampled)")
         
         plot_time = time.time() - plot_start
-        logger.info(f"[DEBUG] All channels plotted in {plot_time:.2f}s")
-        logger.info(f"[DEBUG] Total data points added to waveform viewer: {total_data_points:,} points across {len(self._channel_data_cache)} channels")
+        logger.info(f"All channels plotted in {plot_time:.2f}s")
+        logger.info(f"Total data points added to waveform viewer: {total_data_points:,} points across {len(self._channel_data_cache)} channels")
         
         # Add playhead line and set X/Y limits based on data
         limits_start = time.time()
@@ -319,7 +343,7 @@ class WaveformViewer(QWidget):
                     yMin=overall_y_min,
                     yMax=overall_y_max
                 )
-                logger.debug(f"[DEBUG] Panning limits set to overall range: X=[{overall_x_min:.2f}, {overall_x_max:.2f}], Y=[{overall_y_min:.2f}, {overall_y_max:.2f}]")
+                logger.debug(f"Panning limits set to overall range: X=[{overall_x_min:.2f}, {overall_x_max:.2f}], Y=[{overall_y_min:.2f}, {overall_y_max:.2f}]")
             
             # Set view range to active channel's range
             if active_channel and active_channel in self._channel_data_cache:
@@ -344,7 +368,7 @@ class WaveformViewer(QWidget):
                     yRange=(view_y_min, view_y_max),
                     padding=0
                 )
-                logger.debug(f"[DEBUG] View range set to active channel {active_channel}: X=[{view_x_min:.2f}, {view_x_max:.2f}], Y=[{view_y_min:.2f}, {view_y_max:.2f}]")
+                logger.debug(f"View range set to active channel {active_channel}: X=[{view_x_min:.2f}, {view_x_max:.2f}], Y=[{view_y_min:.2f}, {view_y_max:.2f}]")
             else:
                 # No active channel or channel not found, use overall range
                 if self._overall_x_range is not None and self._overall_y_range is not None:
@@ -361,7 +385,7 @@ class WaveformViewer(QWidget):
                         yRange=(view_y_min, view_y_max),
                         padding=0
                     )
-                    logger.debug(f"[DEBUG] View range set to overall range: X=[{view_x_min:.2f}, {view_x_max:.2f}], Y=[{view_y_min:.2f}, {view_y_max:.2f}]")
+                    logger.debug(f"View range set to overall range: X=[{view_x_min:.2f}, {view_x_max:.2f}], Y=[{view_y_min:.2f}, {view_y_max:.2f}]")
             
             # Set playhead to start of overall time range
             if self._overall_x_range is not None:
@@ -375,16 +399,12 @@ class WaveformViewer(QWidget):
                 pen=pg.mkPen(color='r', width=2, style=Qt.PenStyle.DashLine)
             )
             self.plot_widget.addItem(self._playhead_line)
-            
-            # Update axis labels
-            start_time = trace.stats.starttime
-            self.plot_widget.setLabel('bottom', f'Time (UTC from {start_time.strftime("%Y-%m-%d %H:%M:%S")})')
         
         limits_time = time.time() - limits_start
-        logger.debug(f"[DEBUG] Setting limits and resetting view took {limits_time:.2f}s")
+        logger.debug(f"Setting limits and resetting view took {limits_time:.2f}s")
         
         total_time = time.time() - update_start
-        logger.info(f"[DEBUG] WaveformViewer.update_waveform complete in {total_time:.2f}s total")
+        logger.info(f"WaveformViewer.update_waveform complete in {total_time:.2f}s total")
         logger.info(f"Updated waveform display with {len(self._channel_data_cache)} channels")
     
     def update_playhead(self, timestamp: UTCDateTime) -> None:

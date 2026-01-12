@@ -555,8 +555,8 @@ class DataManager:
         if len(path_parts) >= 3:
             station_info = f"{path_parts[-3]}/{path_parts[-2]}/{path_parts[-1]}"
         
-        logger.info(f"[DEBUG] Loading {len(mseed_files)} .mseed files from cache for {station_info}...")
-        logger.info(f"[DEBUG] Cache path: {cache_path}")
+        logger.info(f"Loading {len(mseed_files)} .mseed files from cache for {station_info}...")
+        logger.info(f"Cache path: {cache_path}")
         
         try:
             # Load all files into a single stream
@@ -580,41 +580,41 @@ class DataManager:
                     
                     # Log every 10th file or if file loading takes > 1 second
                     if (i + 1) % 10 == 0 or file_load_time > 1.0:
-                        logger.debug(f"[DEBUG] Loaded file {i+1}/{len(mseed_files)}: {mseed_file.name} "
+                        logger.debug(f"Loaded file {i+1}/{len(mseed_files)}: {mseed_file.name} "
                                    f"({file_size/1024/1024:.2f} MB, {file_load_time:.2f}s)")
                 except Exception as e:
                     logger.warning(f"Failed to parse {mseed_file.name}: {e}")
                     # Skip corrupted files
             
             load_time = time.time() - load_start
-            logger.info(f"[DEBUG] File loading complete: {files_loaded}/{len(mseed_files)} files, "
+            logger.info(f"File loading complete: {files_loaded}/{len(mseed_files)} files, "
                        f"{total_size/1024/1024:.2f} MB total, {load_time:.2f}s elapsed")
             
             if len(stream) == 0:
                 raise ValueError("No valid traces loaded from cache")
             
             # Log trace information before merging
-            logger.info(f"[DEBUG] Before merge: {len(stream)} traces")
+            logger.info(f"Before merge: {len(stream)} traces")
             total_samples = sum(trace.stats.npts for trace in stream)
-            logger.info(f"[DEBUG] Total samples before merge: {total_samples:,}")
+            logger.info(f"Total samples before merge: {total_samples:,}")
             
             # Merge traces when possible (same network, station, location, channel)
             merge_start = time.time()
-            logger.info(f"[DEBUG] Starting trace merge operation...")
+            logger.info(f"Starting trace merge operation...")
             stream.merge(method=1)  # Method 1: fill gaps with NaN
             merge_time = time.time() - merge_start
-            logger.info(f"[DEBUG] Merge complete: {len(stream)} traces after merge, {merge_time:.2f}s elapsed")
+            logger.info(f"Merge complete: {len(stream)} traces after merge, {merge_time:.2f}s elapsed")
             
             # Log final trace information
             total_samples_after = sum(trace.stats.npts for trace in stream)
-            logger.info(f"[DEBUG] Total samples after merge: {total_samples_after:,}")
+            logger.info(f"Total samples after merge: {total_samples_after:,}")
             for trace in stream:
-                logger.debug(f"[DEBUG] Trace: {trace.id}, samples: {trace.stats.npts:,}, "
+                logger.debug(f"Trace: {trace.id}, samples: {trace.stats.npts:,}, "
                            f"rate: {trace.stats.sampling_rate} Hz, "
                            f"duration: {trace.stats.endtime - trace.stats.starttime:.1f}s")
             
             total_time = time.time() - start_time
-            logger.info(f"[DEBUG] Loaded stream with {len(stream)} traces in {total_time:.2f}s total")
+            logger.info(f"Loaded stream with {len(stream)} traces in {total_time:.2f}s total")
             return stream
             
         except Exception as e:
@@ -662,12 +662,12 @@ class DataManager:
             file_count_callback(len(file_urls))
         
         # Download files
-        logger.info(f"[DEBUG] Starting download of {len(file_urls)} files for {network}/{station}/{year}/{doy:03d}")
+        logger.info(f"Starting download of {len(file_urls)} files for {network}/{station}/{year}/{doy:03d}")
         downloaded = self.download_mseed_files(file_urls, cache_path, progress_callback)
         
         if not downloaded:
             raise Exception(f"Failed to download any files from {url}")
         
-        logger.info(f"[DEBUG] Download complete: {len(downloaded)}/{len(file_urls)} files cached to {cache_path}")
+        logger.info(f"Download complete: {len(downloaded)}/{len(file_urls)} files cached to {cache_path}")
         return cache_path
 

@@ -93,14 +93,28 @@ class ObjectCard(QFrame):
             
             layout.addLayout(address_ip_layout)
         else:  # Serial
-            # Serial Port (dropdown with available ports)
+            # Serial Port (dropdown with available ports) and retry button
             port_layout = QVBoxLayout()
-            port_layout.addWidget(QLabel("Serial Port:"))
+            port_label_layout = QHBoxLayout()
+            port_label_layout.addWidget(QLabel("Serial Port:"))
+            port_label_layout.addStretch()
+            port_layout.addLayout(port_label_layout)
+            
+            port_control_layout = QHBoxLayout()
             self.port_combo = QComboBox()
             self.port_combo.setEditable(True)  # Allow typing custom port names
             self._populate_serial_ports()
             self.port_combo.currentTextChanged.connect(self._on_serial_port_changed)
-            port_layout.addWidget(self.port_combo)
+            port_control_layout.addWidget(self.port_combo)
+            
+            # Retry button for Serial connection
+            self.retry_button = QPushButton("Retry")
+            self.retry_button.setMaximumWidth(60)
+            self.retry_button.clicked.connect(self._on_retry_serial_connection)
+            self.retry_button.setEnabled(False)  # Disabled by default, enabled when connection fails
+            port_control_layout.addWidget(self.retry_button)
+            
+            port_layout.addLayout(port_control_layout)
             layout.addLayout(port_layout)
         
         # Remap Min and Max side by side
@@ -113,8 +127,8 @@ class ObjectCard(QFrame):
         self.remap_min_spinbox.setRange(-1000000.0, 1000000.0)
         self.remap_min_spinbox.setValue(0.0)
         self.remap_min_spinbox.setDecimals(3)
-        self.remap_min_spinbox.valueChanged.connect(lambda: self._validate_remapping())
-        self.remap_min_spinbox.valueChanged.connect(lambda: self.config_changed.emit(self._name))
+        # Validate and commit only when user finishes editing (Enter or focus loss)
+        self.remap_min_spinbox.editingFinished.connect(self._on_remap_min_finished)
         remap_min_layout.addWidget(self.remap_min_spinbox)
         remap_layout.addLayout(remap_min_layout)
         
@@ -125,10 +139,14 @@ class ObjectCard(QFrame):
         self.remap_max_spinbox.setRange(-1000000.0, 1000000.0)
         self.remap_max_spinbox.setValue(1.0)
         self.remap_max_spinbox.setDecimals(3)
-        self.remap_max_spinbox.valueChanged.connect(lambda: self._validate_remapping())
-        self.remap_max_spinbox.valueChanged.connect(lambda: self.config_changed.emit(self._name))
+        # Validate and commit only when user finishes editing (Enter or focus loss)
+        self.remap_max_spinbox.editingFinished.connect(self._on_remap_max_finished)
         remap_max_layout.addWidget(self.remap_max_spinbox)
         remap_layout.addLayout(remap_max_layout)
+        
+        # Initialize last valid values
+        self._last_valid_remap_min = 0.0
+        self._last_valid_remap_max = 1.0
         
         layout.addLayout(remap_layout)
         
@@ -266,13 +284,33 @@ class ObjectCard(QFrame):
         # Emit config changed to update the SerialObject
         self.config_changed.emit(self._name)
     
-    def _validate_remapping(self) -> None:
-        """Validate that remap_min < remap_max."""
+    def _on_remap_min_finished(self) -> None:
+        """Handle remap min field editing finished (Enter or focus loss)."""
         min_val = self.remap_min_spinbox.value()
         max_val = self.remap_max_spinbox.value()
+        
+        # Validate: min must be < max
         if min_val >= max_val:
-            # Adjust max to be slightly above min
-            self.remap_max_spinbox.setValue(min_val + 0.001)
+            # Restore last valid value
+            self.remap_min_spinbox.setValue(self._last_valid_remap_min)
+        else:
+            # Update last valid value and emit config change
+            self._last_valid_remap_min = min_val
+            self.config_changed.emit(self._name)
+    
+    def _on_remap_max_finished(self) -> None:
+        """Handle remap max field editing finished (Enter or focus loss)."""
+        min_val = self.remap_min_spinbox.value()
+        max_val = self.remap_max_spinbox.value()
+        
+        # Validate: min must be < max
+        if min_val >= max_val:
+            # Restore last valid value
+            self.remap_max_spinbox.setValue(self._last_valid_remap_max)
+        else:
+            # Update last valid value and emit config change
+            self._last_valid_remap_max = max_val
+            self.config_changed.emit(self._name)
     
     def _on_start_clicked(self) -> None:
         """Handle start button click."""
@@ -313,13 +351,31 @@ class ObjectCard(QFrame):
             # If not connected, disable Start button and enable Stop button only if streaming
             if not connected:
                 self.start_button.setEnabled(False)
+                # Enable retry button when connection fails (only if port is selected)
+                port_name = self.port_combo.currentText()
+                if port_name and port_name != "Select port...":
+                    self.retry_button.setEnabled(True)
+                else:
+                    self.retry_button.setEnabled(False)
                 # If streaming, stop it
                 if self._streaming:
                     self._on_stop_clicked()
             else:
-                # If connected, enable Start button if not streaming
+                # If connected, enable Start button if not streaming, disable retry button
+                self.retry_button.setEnabled(False)
                 if not self._streaming:
                     self.start_button.setEnabled(True)
+    
+    def _on_retry_serial_connection(self) -> None:
+        """Handle retry button click for Serial connection."""
+        if self._communication_type != "Serial":
+            return
+        
+        # Only retry if a valid port is selected
+        port_name = self.port_combo.currentText()
+        if port_name and port_name != "Select port...":
+            # Emit config changed to trigger reconnection attempt
+            self.config_changed.emit(self._name)
     
     def set_active_channel(self, channel: str) -> None:
         """
@@ -471,13 +527,18 @@ class ObjectCard(QFrame):
             # Baudrate is always SERIAL_BAUDRATE from settings, no need to set it
         
         if 'remap_min' in config:
-            self.remap_min_spinbox.setValue(config['remap_min'])
+            min_val = config['remap_min']
+            self.remap_min_spinbox.setValue(min_val)
+            self._last_valid_remap_min = min_val
         elif 'scale' in config:
             # Backward compatibility: convert old scale to remap_max
             scale = config['scale']
             self.remap_max_spinbox.setValue(scale)
+            self._last_valid_remap_max = scale
         if 'remap_max' in config:
-            self.remap_max_spinbox.setValue(config['remap_max'])
+            max_val = config['remap_max']
+            self.remap_max_spinbox.setValue(max_val)
+            self._last_valid_remap_max = max_val
         if 'streaming_enabled' in config:
             self.set_streaming_state(config['streaming_enabled'])
         elif 'enabled' in config:

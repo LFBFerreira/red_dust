@@ -42,7 +42,7 @@ class DataLoadThread(QThread):
     def run(self):
         import time
         thread_start = time.time()
-        logger.info(f"[DEBUG] DataLoadThread started for {self.network}/{self.station}/{self.year}/{self.doy:03d}")
+        logger.info(f"DataLoadThread started for {self.network}/{self.station}/{self.year}/{self.doy:03d}")
         
         try:
             # Progress callback for downloads
@@ -51,30 +51,30 @@ class DataLoadThread(QThread):
             
             # File count callback
             def file_count_callback(total: int):
-                logger.info(f"[DEBUG] Total files to download: {total}")
+                logger.info(f"Total files to download: {total}")
                 self.file_count_known.emit(total)
             
             fetch_start = time.time()
-            logger.info(f"[DEBUG] Starting fetch_and_cache...")
+            logger.info(f"Starting fetch_and_cache...")
             cache_path = self.data_manager.fetch_and_cache(
                 self.network, self.station, self.year, self.doy,
                 progress_callback=progress_callback,
                 file_count_callback=file_count_callback
             )
             fetch_time = time.time() - fetch_start
-            logger.info(f"[DEBUG] fetch_and_cache completed in {fetch_time:.2f}s")
+            logger.info(f"fetch_and_cache completed in {fetch_time:.2f}s")
             
             load_start = time.time()
-            logger.info(f"[DEBUG] Starting load_from_cache...")
+            logger.info(f"Starting load_from_cache...")
             stream = self.data_manager.load_from_cache(cache_path)
             load_time = time.time() - load_start
-            logger.info(f"[DEBUG] load_from_cache completed in {load_time:.2f}s")
+            logger.info(f"load_from_cache completed in {load_time:.2f}s")
             
             total_time = time.time() - thread_start
-            logger.info(f"[DEBUG] DataLoadThread complete in {total_time:.2f}s total")
+            logger.info(f"DataLoadThread complete in {total_time:.2f}s total")
             self.data_loaded.emit(stream)
         except Exception as e:
-            logger.exception(f"[DEBUG] Error in data load thread for {self.network}/{self.station}/{self.year}/{self.doy:03d}")
+            logger.exception(f"Error in data load thread for {self.network}/{self.station}/{self.year}/{self.doy:03d}")
             self.error_occurred.emit(str(e))
 
 
@@ -142,6 +142,10 @@ class MainWindow(QMainWindow):
         load_action.setShortcut("Ctrl+O")
         load_action.triggered.connect(self._on_load)
         
+        # Load Recent action
+        load_recent_action = file_menu.addAction("Load Recent")
+        load_recent_action.triggered.connect(self._on_load_recent)
+        
         # About menu
         about_menu = menubar.addMenu("About")
         
@@ -149,12 +153,65 @@ class MainWindow(QMainWindow):
         about_action = about_menu.addAction("About Red Dust Control Center")
         about_action.triggered.connect(self._on_about)
     
+    def _get_recent_sessions(self, max_count: int = 10) -> list[Path]:
+        """
+        Get list of recent session files, sorted by modification time.
+        
+        Args:
+            max_count: Maximum number of recent sessions to return
+            
+        Returns:
+            List of Path objects to recent session files, most recent first
+        """
+        sessions_dir = self.session_manager.sessions_dir
+        if not sessions_dir.exists():
+            return []
+        
+        # Get all JSON files in sessions directory
+        session_files = list(sessions_dir.glob("*.json"))
+        
+        # Sort by modification time (most recent first)
+        session_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        
+        # Return up to max_count most recent
+        return session_files[:max_count]
+    
+    def _on_load_recent(self):
+        """Handle Load Recent toolbar action - show menu with recent sessions."""
+        recent_sessions = self._get_recent_sessions()
+        
+        if not recent_sessions:
+            QMessageBox.information(
+                self,
+                "No Recent Sessions",
+                "No recent session files found."
+            )
+            return
+        
+        # Create menu with recent sessions
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QCursor
+        menu = QMenu(self)
+        
+        for session_path in recent_sessions:
+            # Use filename as display name
+            display_name = session_path.name
+            action = menu.addAction(display_name)
+            # Store full path as data
+            action.setData(str(session_path))
+            action.triggered.connect(lambda checked, path=session_path: self._load_session(path))
+        
+        # Show menu at cursor position
+        menu.exec(QCursor.pos())
+    
     def _setup_ui(self):
         """Set up the user interface."""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
         main_layout = QVBoxLayout()
+        main_layout.setSpacing(12)  # Increased spacing between main groups
+        main_layout.setContentsMargins(6, 6, 6, 6)  # Add some margin around the entire layout
         central_widget.setLayout(main_layout)
         
         # Row 1: Data Overview (Metadata + Waveform)
@@ -282,44 +339,44 @@ class MainWindow(QMainWindow):
     
     def _reset_state_for_new_load(self):
         """Reset all state when loading new data (especially when station changes)."""
-        logger.info(f"[DEBUG] Resetting state for new data load...")
+        logger.info(f"Resetting state for new data load...")
         
         # Stop any ongoing playback
         if self.playback_controller:
-            logger.debug(f"[DEBUG] Stopping playback controller...")
+            logger.debug(f"Stopping playback controller...")
             self.playback_controller.stop()
         
         # Clear waveform viewer
         if self.waveform_viewer:
-            logger.debug(f"[DEBUG] Clearing waveform viewer...")
+            logger.debug(f"Clearing waveform viewer...")
             self.waveform_viewer.plot_widget.clear()
         
         # Reset waveform model (clear old stream)
         if self.waveform_model:
-            logger.debug(f"[DEBUG] Resetting waveform model...")
+            logger.debug(f"Resetting waveform model...")
             self.waveform_model.set_stream(None)
         
         # Stop any OSC streaming
         if self.osc_manager:
-            logger.debug(f"[DEBUG] Stopping OSC streaming...")
+            logger.debug(f"Stopping OSC streaming...")
             # OSC manager will handle stopping when model is cleared
         
         # Clear any pending load thread
         if self.load_thread and self.load_thread.isRunning():
-            logger.warning(f"[DEBUG] Previous load thread still running, waiting for it...")
+            logger.warning(f"Previous load thread still running, waiting for it...")
             self.load_thread.wait(1000)  # Wait up to 1 second
         
-        logger.info(f"[DEBUG] State reset complete")
+        logger.info(f"State reset complete")
     
     def _on_load_requested(self, selection: dict):
         """Handle data load request."""
         import time
-        logger.info(f"[DEBUG] ===== Starting data load request =====")
-        logger.info(f"[DEBUG] Selection: {selection}")
-        logger.info(f"[DEBUG] Station: {selection.get('station', 'unknown')}")
+        logger.info(f"===== Starting data load request =====")
+        logger.info(f"Selection: {selection}")
+        logger.info(f"Station: {selection.get('station', 'unknown')}")
         
         # Reset state when loading new data (especially when station changes)
-        logger.info(f"[DEBUG] Resetting state for new data load...")
+        logger.info(f"Resetting state for new data load...")
         self._reset_state_for_new_load()
         
         self.data_picker.set_loading(True)
@@ -337,69 +394,69 @@ class MainWindow(QMainWindow):
         self.load_thread.file_count_known.connect(self.data_picker.set_total_files)
         self.load_thread.download_progress.connect(self.data_picker.update_download_progress)
         self.load_thread.start()
-        logger.info(f"[DEBUG] Data load thread started")
+        logger.info(f"Data load thread started")
     
     def _on_data_loaded(self, stream):
         """Handle successful data load."""
         import time
         process_start = time.time()
         
-        logger.info(f"[DEBUG] ===== Data loaded callback started =====")
-        logger.info(f"[DEBUG] Stream contains {len(stream)} traces")
+        logger.info(f"===== Data loaded callback started =====")
+        logger.info(f"Stream contains {len(stream)} traces")
         
         # Log stream details for debugging
         if stream and len(stream) > 0:
             first_trace = stream[0]
-            logger.info(f"[DEBUG] First trace: {first_trace.id}, "
+            logger.info(f"First trace: {first_trace.id}, "
                        f"station: {first_trace.stats.station}, "
                        f"samples: {first_trace.stats.npts:,}, "
                        f"rate: {first_trace.stats.sampling_rate} Hz")
             total_samples = sum(t.stats.npts for t in stream)
-            logger.info(f"[DEBUG] Total samples across all traces: {total_samples:,}")
+            logger.info(f"Total samples across all traces: {total_samples:,}")
         
         self.data_picker.set_loading(False)
         
         # Update waveform model
-        logger.info(f"[DEBUG] Setting stream in waveform model...")
+        logger.info(f"Setting stream in waveform model...")
         model_start = time.time()
         self.waveform_model.set_stream(stream)
         model_time = time.time() - model_start
-        logger.info(f"[DEBUG] Waveform model updated in {model_time:.2f}s")
+        logger.info(f"Waveform model updated in {model_time:.2f}s")
         
         # Update channel combo box in playback controls
-        logger.info(f"[DEBUG] Updating channel controls...")
+        logger.info(f"Updating channel controls...")
         channels = self.waveform_model.get_all_channels()
-        logger.info(f"[DEBUG] Found {len(channels)} channels: {channels}")
+        logger.info(f"Found {len(channels)} channels: {channels}")
         self.playback_controls.set_channels(channels)
         
         # Set active channel
         active_channel = self.waveform_model.get_active_channel()
-        logger.info(f"[DEBUG] Active channel: {active_channel}")
+        logger.info(f"Active channel: {active_channel}")
         if active_channel:
             self.playback_controls.set_active_channel(active_channel)
             # Update object cards with active channel
             self._update_object_card_channels()
         
         # Update waveform viewer
-        logger.info(f"[DEBUG] Updating waveform viewer...")
+        logger.info(f"Updating waveform viewer...")
         viewer_start = time.time()
         self.waveform_viewer.update_waveform(stream, active_channel)
         viewer_time = time.time() - viewer_start
-        logger.info(f"[DEBUG] Waveform viewer updated in {viewer_time:.2f}s")
+        logger.info(f"Waveform viewer updated in {viewer_time:.2f}s")
         
         # Update metadata display
-        logger.info(f"[DEBUG] Updating metadata display...")
+        logger.info(f"Updating metadata display...")
         self._update_metadata()
         
         # Reset playback
-        logger.info(f"[DEBUG] Resetting playback controller...")
+        logger.info(f"Resetting playback controller...")
         self.playback_controller.stop()
         
         # Update playback controller
         self.playback_controller.set_waveform_model(self.waveform_model)
         
         # Update value display with initial values
-        logger.info(f"[DEBUG] Updating value display...")
+        logger.info(f"Updating value display...")
         time_range = self.waveform_model.get_time_range()
         if time_range:
             initial_time = time_range[0]
@@ -411,12 +468,12 @@ class MainWindow(QMainWindow):
         
         # If we have pending session state, restore it now
         if self.pending_session_state:
-            logger.info(f"[DEBUG] Restoring pending session state...")
+            logger.info(f"Restoring pending session state...")
             self._restore_session_state_after_load(self.pending_session_state)
             self.pending_session_state = None
         
         process_time = time.time() - process_start
-        logger.info(f"[DEBUG] ===== Data loaded callback complete in {process_time:.2f}s =====")
+        logger.info(f"===== Data loaded callback complete in {process_time:.2f}s =====")
     
     def _on_load_error(self, error_message: str):
         """Handle data load error."""
@@ -605,9 +662,9 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
                 if new_port and new_port != "Select port..." and obj.port != new_port:
                     needs_recreate = True
                 elif new_port and new_port != "Select port..." and obj.port == new_port:
-                    # Port is the same, but try to open it if not already open
+                    # Port is the same, but try to open it if not already open (retry scenario)
                     if isinstance(obj, SerialObject) and not obj.is_connected():
-                        if obj.update_port(new_port):
+                        if obj.open_port():
                             # Port opened successfully
                             self.osc_manager.object_connection_state_changed.emit(name, True)
                             card.set_connection_state(True)

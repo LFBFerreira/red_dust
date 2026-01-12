@@ -124,7 +124,7 @@ class WaveformModel:
         data = trace.data
         data_size = len(data)
         
-        logger.info(f"[DEBUG] Recalculating normalization for channel {self._active_channel}: "
+        logger.info(f"Recalculating normalization for channel {self._active_channel}: "
                    f"{data_size:,} samples")
         
         if len(data) == 0:
@@ -133,7 +133,7 @@ class WaveformModel:
             return
         
         # Calculate percentiles - this can be slow for large datasets
-        logger.debug(f"[DEBUG] Computing percentiles P{self._lo_percentile} and P{self._hi_percentile}...")
+        logger.debug(f"Computing percentiles P{self._lo_percentile} and P{self._hi_percentile}...")
         percentile_start = time.time()
         lo_val = np.percentile(data, self._lo_percentile)
         hi_val = np.percentile(data, self._hi_percentile)
@@ -143,7 +143,7 @@ class WaveformModel:
         self._normalization_max = float(hi_val)
         
         calc_time = time.time() - calc_start
-        logger.info(f"[DEBUG] Normalization calculated in {calc_time:.2f}s "
+        logger.info(f"Normalization calculated in {calc_time:.2f}s "
                    f"(percentile calc: {percentile_time:.2f}s): "
                    f"range {self._normalization_min:.6f} to {self._normalization_max:.6f}")
     
