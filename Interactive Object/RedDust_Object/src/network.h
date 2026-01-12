@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
-#include <WiFiManager.h>
 
 // Network state getters
 bool isWiFiConnected();

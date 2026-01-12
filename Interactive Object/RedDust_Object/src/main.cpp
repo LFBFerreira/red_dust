@@ -31,25 +31,8 @@ const unsigned long SERIAL_RECEIVING_TIMEOUT = 100;  // Consider "receiving" if 
 CRGB serialColor = CRGB::Black;  // Current color from Serial data
 
 CRGB leds[NUM_LEDS];
-unsigned long lastBlinkTime = 0;
-bool blinkState = false;
-CRGB blinkColor = CRGB::Black;
-const unsigned long BLINK_INTERVAL = 1000;  // 1 second for slow blinking
-
-// Separate blink timer for Serial LED status
-unsigned long lastSerialBlinkTime = 0;
-bool serialBlinkState = false;
-
-// Function to handle LED blinking (non-blocking)
-void updateBlink() {
-  unsigned long currentTime = millis();
-  if (currentTime - lastBlinkTime >= BLINK_INTERVAL) {
-    blinkState = !blinkState;
-    lastBlinkTime = currentTime;
-    leds[0] = blinkState ? blinkColor : CRGB::Black;
-    FastLED.show();
-  }
-}
+CRGB currentColor = CRGB::Black;  // Current color from Serial/OSC data
+bool hasColorData = false;  // Whether we have valid color data to display
 
 // Function to map normalized value (0..1) to color between red and blue
 CRGB mapValueToColor(float value) {
@@ -73,8 +56,8 @@ void handleOSCMessage(OSCMessage &msg) {
     
     // Map value to color
     CRGB color = mapValueToColor(normalizedValue);
-    leds[0] = color;
-    FastLED.show();
+    currentColor = color;
+    hasColorData = true;
     
     Serial.printf("Received OSC: value=%.3f, R=%d, G=0, B=%d\n", 
                   normalizedValue, color.red, color.blue);
@@ -105,18 +88,22 @@ void processOSCMessages() {
 
 // Handle Serial value (normalized 0..1)
 void handleSerialValue(float value, String timestamp) {
+  // Validate value is a valid number (not NaN or infinity)
+  if (isnan(value) || isinf(value)) {
+    Serial.println("Error: Invalid value (NaN or infinity), ignoring");
+    return;
+  }
+  
   // Clamp value to 0..1 range
   value = constrain(value, 0.0, 1.0);
   
   // Map value to color (Red to Blue)
   CRGB color = mapValueToColor(value);
-  serialColor = color;  // Store the color
+  currentColor = color;
+  hasColorData = true;
+  serialColor = color;  // Store the color for reference
   serialReceivingData = true;  // Mark as currently receiving
   lastSerialCharTime = millis();  // Update timestamp
-  
-  // Display the color immediately when receiving data
-  leds[0] = color;
-  FastLED.show();
   
   Serial.printf("Received Serial: value=%.6f, R=%d, G=0, B=%d\n", 
                 value, color.red, color.blue);
@@ -134,14 +121,27 @@ void processSerialMessage(String message) {
   String valueStr = message.substring(0, commaIndex);
   String timestamp = message.substring(commaIndex + 1);
   
+  // Trim whitespace from value string
+  valueStr.trim();
+  
+  // Check if value string is empty
+  if (valueStr.length() == 0) {
+    return;
+  }
+  
   // Convert to float
   float value = valueStr.toFloat();
   
   // Check if conversion was successful
   // (toFloat() returns 0.0 on error, so validate the string)
+  // Also check if the value is reasonable (within -1000 to 1000 range to catch parsing errors)
   if (valueStr.length() > 0 && 
-      (valueStr.indexOf('.') >= 0 || valueStr.toInt() != 0 || valueStr == "0")) {
+      (valueStr.indexOf('.') >= 0 || valueStr.toInt() != 0 || valueStr == "0" || valueStr == "0.0") &&
+      value >= -1000.0 && value <= 1000.0) {
+    // Value will be clamped to 0..1 in handleSerialValue
     handleSerialValue(value, timestamp);
+  } else {
+    Serial.printf("Error: Invalid serial value format: '%s'\n", valueStr.c_str());
   }
 }
 
@@ -226,29 +226,31 @@ bool isSerialActive() {
   return serialActive;
 }
 
-// Update LED based on Serial connection state
-// This function should be called frequently and always takes precedence over WiFi LED
-void updateSerialLED() {
-  unsigned long currentTime = millis();
+// Check if Serial is connected (has received data)
+bool isSerialConnected() {
+  return serialConnected;
+}
+
+// Update LED based on connection status and received data
+// Rules:
+// - If neither Serial nor WiFi connected: RED
+// - If one or both connected: show color from received data (if any), otherwise black
+void updateLED() {
+  bool serialIsConnected = isSerialConnected();
+  bool wifiIsConnected = isWiFiConnected();
   
-  if (serialReceivingData) {
-    // Currently receiving data - show the color from the data
-    leds[0] = serialColor;
-    FastLED.show();
-  } else if (serialConnected) {
-    // Connected but not currently receiving - blinking blue
-    if (currentTime - lastSerialBlinkTime >= BLINK_INTERVAL) {
-      serialBlinkState = !serialBlinkState;
-      lastSerialBlinkTime = currentTime;
-      leds[0] = serialBlinkState ? CRGB::Blue : CRGB::Black;
-      FastLED.show();
-    }
+  if (!serialIsConnected && !wifiIsConnected) {
+    // Neither connected - show red
+    leds[0] = CRGB::Red;
+  } else if (hasColorData) {
+    // One or both connected and we have color data - show the color
+    leds[0] = currentColor;
   } else {
-    // Available but nothing connected - solid blue
-    // Always set this immediately (no conditional) to override any WiFi LED changes
-    leds[0] = CRGB::Blue;
-    FastLED.show();
+    // One or both connected but no data yet - show black
+    leds[0] = CRGB::Black;
   }
+  
+  FastLED.show();
 }
 
 void setup() {
@@ -265,21 +267,22 @@ void setup() {
   // Initialize Serial LED state
   serialConnected = false;
   serialReceivingData = false;
-  serialBlinkState = false;
-  lastSerialBlinkTime = 0;
+  currentColor = CRGB::Black;
+  hasColorData = false;
   
   // Initialize RGB LED (FastLED)
   FastLED.addLeds<LED_TYPE, RGB_LED_PIN, COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setBrightness(100);  // Set brightness (0-255)
-  leds[0] = CRGB::Blue;        // Start with solid blue (Serial available, nothing connected)
-  FastLED.show();
   
-  // Setup network (WiFiManager)
+  // Initial LED state will be set by updateLED() in loop
+  
+  // Setup network
   setupNetwork();
 }
 
 void loop() {
-  // Process network (WiFiManager)
+  // ALWAYS process network - this handles connection and reconnection attempts
+  // regardless of Serial status
   processNetwork();
   
   // Process Serial messages (has precedence over OSC)
@@ -300,10 +303,8 @@ void loop() {
     }
   }
   
-  // ALWAYS update Serial LED at the end of every loop iteration
-  // This ensures Serial LED status always takes precedence over any WiFi LED updates
-  // Serial LED is the only thing that should control the RGB LED
-  updateSerialLED();
+  // Update LED based on connection status and received data
+  updateLED();
   
   // Small delay to prevent watchdog issues
   delay(1);
