@@ -37,6 +37,7 @@ class ObjectCard(QFrame):
         self._streaming = False
         self._active_channel = None
         self._channel_colors = {}  # Cache of channel to color mapping
+        self._refreshing_ports = False  # Guard flag to prevent recursive refresh
         self._setup_ui()
         self.setFrameStyle(QFrame.Shape.Box)
         self.setLineWidth(1)
@@ -214,31 +215,82 @@ class ObjectCard(QFrame):
         # Update background color when widget becomes visible (palette is fully initialized)
         self._update_background_color()
     
-    def _populate_serial_ports(self) -> None:
-        """Populate serial port dropdown with available ports."""
+    def _populate_serial_ports(self, excluded_ports: set = None) -> None:
+        """
+        Populate serial port dropdown with available ports.
+        
+        Args:
+            excluded_ports: Set of port names to exclude from the dropdown
+        """
+        # Guard against recursive calls
+        if self._refreshing_ports:
+            return
+        
+        if excluded_ports is None:
+            excluded_ports = set()
+        
+        self._refreshing_ports = True
         try:
-            import serial.tools.list_ports
-            ports = serial.tools.list_ports.comports()
-            available_ports = [port.device for port in ports]
+            # Get current selection before clearing
+            current_port = self.port_combo.currentText()
+            is_current_port_valid = (current_port and 
+                                    current_port != "Select port..." and 
+                                    current_port.strip() != "")
             
-            # Clear and add available ports
-            self.port_combo.clear()
-            self.port_combo.addItems(available_ports)
-            
-            # Add placeholder text - don't select any port by default
-            if not available_ports:
+            try:
+                import serial.tools.list_ports
+                ports = serial.tools.list_ports.comports()
+                available_ports = [port.device for port in ports]
+                
+                # Filter out excluded ports (but keep the current port if it's valid)
+                filtered_ports = [port for port in available_ports 
+                                if port not in excluded_ports or port == current_port]
+                
+                # Block signals during population to prevent recursive refresh
+                self.port_combo.blockSignals(True)
+                
+                # Clear and add filtered ports
+                self.port_combo.clear()
+                self.port_combo.addItems(filtered_ports)
+                
+                # Add placeholder text - don't select any port by default
+                if not filtered_ports:
+                    self.port_combo.addItem("Select port...")
+                    if not is_current_port_valid:
+                        self.port_combo.setCurrentText("Select port...")
+                else:
+                    # Add placeholder as first item
+                    self.port_combo.insertItem(0, "Select port...")
+                    # Restore current selection if it was valid, otherwise select placeholder
+                    if is_current_port_valid and current_port in filtered_ports:
+                        self.port_combo.setCurrentText(current_port)
+                    else:
+                        self.port_combo.setCurrentIndex(0)  # Select placeholder
+                
+                self.port_combo.blockSignals(False)
+            except RecursionError:
+                # Handle recursion error from serial library (problematic device)
+                # Use simple print to avoid recursion in logging
+                print(f"Warning: RecursionError while listing serial ports (problematic device detected)")
+                self.port_combo.blockSignals(True)
+                # Fallback: just add placeholder
+                self.port_combo.clear()
                 self.port_combo.addItem("Select port...")
-                self.port_combo.setCurrentText("Select port...")
-            else:
-                # Add placeholder as first item
-                self.port_combo.insertItem(0, "Select port...")
-                self.port_combo.setCurrentIndex(0)  # Select placeholder
-        except Exception as e:
-            logger.error(f"Failed to list serial ports: {e}")
-            # Fallback: just add placeholder
-            self.port_combo.clear()
-            self.port_combo.addItem("Select port...")
-            self.port_combo.setCurrentText("Select port...")
+                if not is_current_port_valid:
+                    self.port_combo.setCurrentText("Select port...")
+                self.port_combo.blockSignals(False)
+            except Exception as e:
+                # Use simple print for critical errors to avoid recursion in logging
+                print(f"Error: Failed to list serial ports: {type(e).__name__}: {e}")
+                self.port_combo.blockSignals(True)
+                # Fallback: just add placeholder
+                self.port_combo.clear()
+                self.port_combo.addItem("Select port...")
+                if not is_current_port_valid:
+                    self.port_combo.setCurrentText("Select port...")
+                self.port_combo.blockSignals(False)
+        finally:
+            self._refreshing_ports = False
     
     def _set_serial_port(self, port_name: str) -> None:
         """
@@ -275,14 +327,23 @@ class ObjectCard(QFrame):
         if self._communication_type != "Serial":
             return
         
-        # Ignore placeholder text
-        if port_name == "Select port..." or not port_name or port_name.strip() == "":
-            # Emit config changed but don't try to open port
-            self.config_changed.emit(self._name)
-            return
-        
-        # Emit config changed to update the SerialObject
+        # Always emit config changed for the actual port change
         self.config_changed.emit(self._name)
+        
+        # Don't trigger refresh if we're already refreshing (prevents recursion)
+        if not self._refreshing_ports:
+            # Request refresh of all serial port dropdowns to update availability
+            self._request_port_refresh()
+    
+    def _request_port_refresh(self) -> None:
+        """Request refresh of all serial port dropdowns in the container."""
+        # Get parent container and request refresh
+        parent = self.parent()
+        while parent:
+            if isinstance(parent, ObjectCardsContainer):
+                parent._refresh_all_serial_ports()
+                break
+            parent = parent.parent()
     
     def _on_remap_min_finished(self) -> None:
         """Handle remap min field editing finished (Enter or focus loss)."""
@@ -558,6 +619,7 @@ class ObjectCardsContainer(QWidget):
         """Initialize ObjectCardsContainer."""
         super().__init__(parent)
         self._cards = {}
+        self._refreshing_ports = False  # Guard flag to prevent recursive refresh
         self._setup_ui()
     
     def _setup_ui(self):
@@ -629,6 +691,11 @@ class ObjectCardsContainer(QWidget):
         self.cards_layout.insertWidget(self.cards_layout.count() - 1, card)
         self._cards[name] = card
         
+        # If it's a Serial card, refresh its ports to exclude already-used ports
+        if communication_type == "Serial":
+            excluded_ports = self._get_used_serial_ports(exclude_card_name=name)
+            card._populate_serial_ports(excluded_ports=excluded_ports)
+        
         self.object_added.emit(name)
         logger.info(f"Added {communication_type} object card: {name}")
         return card
@@ -652,9 +719,13 @@ class ObjectCardsContainer(QWidget):
         """
         if name in self._cards:
             card = self._cards[name]
+            was_serial = card._communication_type == "Serial"
             self.cards_layout.removeWidget(card)
             card.deleteLater()
             del self._cards[name]
+            # Refresh serial port dropdowns if a Serial card was removed
+            if was_serial:
+                self._refresh_all_serial_ports()
             self.object_removed.emit(name)
             logger.info(f"Removed object card: {name}")
     
@@ -678,4 +749,41 @@ class ObjectCardsContainer(QWidget):
             List of configuration dictionaries
         """
         return [card.get_config() for card in self._cards.values()]
+    
+    def _get_used_serial_ports(self, exclude_card_name: str = None) -> set:
+        """
+        Get set of serial ports currently in use by other object cards.
+        
+        Args:
+            exclude_card_name: Name of card to exclude from the check (its port won't be in the set)
+        
+        Returns:
+            Set of port names in use
+        """
+        used_ports = set()
+        for name, card in self._cards.items():
+            if name == exclude_card_name:
+                continue
+            if card._communication_type == "Serial":
+                port = card.port_combo.currentText()
+                if port and port != "Select port..." and port.strip() != "":
+                    used_ports.add(port)
+        return used_ports
+    
+    def _refresh_all_serial_ports(self) -> None:
+        """Refresh serial port dropdowns for all Serial object cards."""
+        # Guard against recursive calls
+        if self._refreshing_ports:
+            return
+        
+        self._refreshing_ports = True
+        try:
+            for name, card in self._cards.items():
+                if card._communication_type == "Serial":
+                    # Get used ports excluding this card
+                    excluded_ports = self._get_used_serial_ports(exclude_card_name=name)
+                    # Refresh the dropdown
+                    card._populate_serial_ports(excluded_ports=excluded_ports)
+        finally:
+            self._refreshing_ports = False
 
