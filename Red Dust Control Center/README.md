@@ -35,6 +35,23 @@ Run the application:
 python main.py
 ```
 
+## Understanding the Waveform Display
+
+### Amplitude Units: "Counts"
+
+The waveform viewer displays amplitude values, and the unit shown depends on the data:
+
+- **"Counts"**: This is the default unit shown when the seismic data is uncalibrated. "Counts" refers to the raw digital values from the seismometer's analog-to-digital converter (ADC) - these are integer values before calibration to physical units.
+
+- **Physical Units**: If the data is calibrated, channels may display physical units such as:
+  - Velocity (m/s)
+  - Acceleration (m/s²)
+  - Displacement (nm, m)
+  
+The amplitude label updates based on the active channel's metadata. If a channel has unit information in its ObsPy trace stats, that unit will be displayed. Otherwise, it defaults to "Counts".
+
+**Note**: Different channels may have different units if some are calibrated and others are not. The label reflects the unit of the currently active channel.
+
 ## Project Structure
 
 - `core/` - Core logic (data management, playback, OSC streaming)

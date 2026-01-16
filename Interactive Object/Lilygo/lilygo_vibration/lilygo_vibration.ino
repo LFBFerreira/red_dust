@@ -6,8 +6,6 @@
 #define PWM_MAX 255    // Maximum PWM value (full intensity)
 
 // Serial communication configuration
-#define SERIAL_BAUD_RATE 115200  // Serial communication baud rate
-
 String serialBuffer = "";
 const int SERIAL_BUFFER_SIZE = 128;
 const unsigned long SERIAL_TIMEOUT_MS = 1000;  // Message timeout
@@ -181,9 +179,8 @@ void updateVibrationMotor() {
 
 void setup() {
   // Initialize serial communication
-  Serial.begin(SERIAL_BAUD_RATE);
+  Serial.begin(115200);
   delay(1000);
-  
   Serial.println("\nArduino Vibration Motor Controller");
   Serial.println("Supports: Serial (value,timestamp format)");
   Serial.println("==========================================");
