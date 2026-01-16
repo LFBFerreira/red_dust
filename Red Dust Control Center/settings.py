@@ -7,8 +7,8 @@ the application. These can be modified to change default behavior.
 
 # Default data selection values
 DEFAULT_STATION = "ELYSE"
-DEFAULT_YEAR = 2018
-DEFAULT_DAY_OF_YEAR = 354 
+DEFAULT_YEAR = 2019
+DEFAULT_DAY_OF_YEAR = 96 
 
 # Network code (typically "XB" for InSight SEIS)
 DEFAULT_NETWORK = "XB"

@@ -53,7 +53,7 @@ class WaveformViewer(QWidget):
         
         # PyQtGraph plot widget - stretches vertically and horizontally
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setLabel('left', 'Amplitude')
+        self.plot_widget.setLabel('left', 'Amplitude')  # Will be updated with units when data loads
         self.plot_widget.setLabel('bottom', 'Time (UTC)')
         self.plot_widget.showGrid(x=True, y=True)
         self.plot_widget.setMouseEnabled(x=True, y=True)
@@ -146,10 +146,21 @@ class WaveformViewer(QWidget):
             
             # Calculate full resolution data
             times_full = start_timestamp + np.arange(npts_original) / sample_rate
-            data_full = trace.data.copy()
+            # Convert to float array to allow NaN assignment (data might be integer)
+            data_full = np.array(trace.data, copy=True, dtype=np.float64)
             
-            # Calculate channel-specific min/max
-            valid_data = data_full[~np.isnan(data_full)]
+            # Replace sentinel/fill values with NaN so they don't appear in the plot
+            # Common sentinel values: -2147483648 (32-bit int min), 2147483647 (32-bit int max)
+            SENTINEL_MIN = -2147483640  # Close to 32-bit int min
+            SENTINEL_MAX = 2147483640   # Close to 32-bit int max
+            sentinel_mask = (data_full <= SENTINEL_MIN) | (data_full >= SENTINEL_MAX)
+            data_full[sentinel_mask] = np.nan
+            
+            # Also replace any non-finite values with NaN
+            data_full[~np.isfinite(data_full)] = np.nan
+            
+            # Calculate channel-specific min/max (excluding NaN and sentinel values)
+            valid_data = data_full[np.isfinite(data_full)]
             if len(valid_data) > 0:
                 channel_y_min = float(np.nanmin(valid_data))
                 channel_y_max = float(np.nanmax(valid_data))
@@ -266,6 +277,27 @@ class WaveformViewer(QWidget):
         if stream is None or len(stream) == 0 or len(self._channel_data_cache) == 0:
             logger.warning(f"No stream data to display")
             return
+        
+        # Update amplitude label with units from active channel
+        amplitude_label = 'Amplitude'
+        if active_channel and stream:
+            # Find the trace for the active channel to get units
+            location, channel_code = active_channel.split('.')
+            for trace in stream:
+                if trace.stats.location == location and trace.stats.channel == channel_code:
+                    # Try to get unit from trace stats (ObsPy may have 'units' attribute)
+                    unit = getattr(trace.stats, 'units', None)
+                    if unit:
+                        amplitude_label = f'Amplitude ({unit})'
+                    else:
+                        # Default to "Counts" for seismic data if no unit specified
+                        amplitude_label = 'Amplitude (Counts)'
+                    break
+        else:
+            # No active channel, use default
+            amplitude_label = 'Amplitude (Counts)'
+        
+        self.plot_widget.setLabel('left', amplitude_label)
         
         # Plot each channel using cached data
         channel_colors = ['#00d4ff', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']  # Colors for channels

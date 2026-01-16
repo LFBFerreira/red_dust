@@ -175,16 +175,33 @@ class PlaybackControls(QWidget):
             raw_value: Raw waveform value (before remapping)
             normalized_value: Normalized value (after remapping, 0-1)
         """
+        import math
+        
+        # Check for None, NaN, or invalid values
         if raw_value is None or normalized_value is None:
+            self.value_label.setText("Raw: -- | Norm: --")
+        elif math.isnan(raw_value) or math.isnan(normalized_value):
             self.value_label.setText("Raw: -- | Norm: --")
         else:
             # Format raw value: no decimals if whole number, otherwise 4 decimals
-            if raw_value == int(raw_value):
-                raw_str = str(int(raw_value))
-            else:
-                raw_str = f"{raw_value:.4f}".rstrip('0').rstrip('.')
+            # Check if it's a whole number (handle NaN/inf safely)
+            try:
+                if not math.isnan(raw_value) and not math.isinf(raw_value) and raw_value == int(raw_value):
+                    raw_str = str(int(raw_value))
+                else:
+                    raw_str = f"{raw_value:.4f}".rstrip('0').rstrip('.')
+            except (ValueError, OverflowError):
+                raw_str = "--"
+            
             # Format normalized value to 3 decimal places
-            norm_str = f"{normalized_value:.3f}"
+            try:
+                if not math.isnan(normalized_value) and not math.isinf(normalized_value):
+                    norm_str = f"{normalized_value:.3f}"
+                else:
+                    norm_str = "--"
+            except (ValueError, OverflowError):
+                norm_str = "--"
+            
             self.value_label.setText(f"Raw: {raw_str} | Norm: {norm_str}")
     
     def update_loop_display(self, start: UTCDateTime = None, end: UTCDateTime = None) -> None:

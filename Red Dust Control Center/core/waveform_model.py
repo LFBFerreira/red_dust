@@ -120,8 +120,9 @@ class WaveformModel:
             self._normalization_max = None
             return
         
-        # Get all data values
-        data = trace.data
+        # Get all data values - create a writable copy to avoid read-only array issues
+        # ObsPy may return read-only arrays from memory-mapped files
+        data = np.array(trace.data, copy=True)
         data_size = len(data)
         
         logger.info(f"Recalculating normalization for channel {self._active_channel}: "
@@ -132,15 +133,45 @@ class WaveformModel:
             self._normalization_max = 1.0
             return
         
+        # Filter out NaN, infinite values, and common sentinel/fill values
+        # Common sentinel values: -2147483648 (32-bit int min), 2147483647 (32-bit int max)
+        valid_mask = np.isfinite(data)
+        # Also filter out extreme sentinel values that might indicate masked/invalid data
+        # These are often used as fill values in seismic data
+        SENTINEL_MIN = -2147483640  # Close to 32-bit int min
+        SENTINEL_MAX = 2147483640   # Close to 32-bit int max
+        valid_mask = valid_mask & (data > SENTINEL_MIN) & (data < SENTINEL_MAX)
+        valid_data = data[valid_mask]
+        
+        if len(valid_data) == 0:
+            logger.warning(f"No valid (finite) data points found for normalization")
+            self._normalization_min = 0.0
+            self._normalization_max = 1.0
+            return
+        
+        # Log data range for debugging
+        data_min = float(np.min(valid_data))
+        data_max = float(np.max(valid_data))
+        invalid_count = data_size - len(valid_data)
+        if invalid_count > 0:
+            logger.info(f"Filtered out {invalid_count:,} invalid/sentinel values from {data_size:,} total samples")
+        logger.debug(f"Data range: min={data_min:.6f}, max={data_max:.6f}, "
+                    f"valid samples={len(valid_data):,}/{data_size:,}")
+        
         # Calculate percentiles - this can be slow for large datasets
         logger.debug(f"Computing percentiles P{self._lo_percentile} and P{self._hi_percentile}...")
         percentile_start = time.time()
-        lo_val = np.percentile(data, self._lo_percentile)
-        hi_val = np.percentile(data, self._hi_percentile)
+        lo_val = np.percentile(valid_data, self._lo_percentile)
+        hi_val = np.percentile(valid_data, self._hi_percentile)
         percentile_time = time.time() - percentile_start
         
         self._normalization_min = float(lo_val)
         self._normalization_max = float(hi_val)
+        
+        # Ensure min <= max (should always be true for percentiles, but check anyway)
+        if self._normalization_min > self._normalization_max:
+            logger.warning(f"Percentiles produced min > max, swapping: min={self._normalization_min:.6f}, max={self._normalization_max:.6f}")
+            self._normalization_min, self._normalization_max = self._normalization_max, self._normalization_min
         
         calc_time = time.time() - calc_start
         logger.info(f"Normalization calculated in {calc_time:.2f}s "
@@ -193,10 +224,16 @@ class WaveformModel:
         # Clamp to valid range
         sample_index = max(0, min(sample_index, len(trace.data) - 1))
         
-        # Get raw value
-        raw_value = float(trace.data[sample_index])
-        
-        return raw_value
+        # Get raw value - handle masked arrays and NaN values
+        try:
+            raw_value = float(trace.data[sample_index])
+            # Check for NaN or infinite values (can occur with masked arrays)
+            if not np.isfinite(raw_value):
+                return None
+            return raw_value
+        except (ValueError, TypeError):
+            # Handle masked values or other conversion errors
+            return None
     
     def get_normalized_value(self, timestamp: UTCDateTime) -> float:
         """
@@ -227,12 +264,25 @@ class WaveformModel:
         # Clamp to valid range
         sample_index = max(0, min(sample_index, len(trace.data) - 1))
         
-        # Get raw value
-        raw_value = float(trace.data[sample_index])
+        # Get raw value - handle masked arrays and NaN values
+        try:
+            raw_value = float(trace.data[sample_index])
+            # Check for NaN or infinite values (can occur with masked arrays)
+            if not np.isfinite(raw_value):
+                return 0.0
+        except (ValueError, TypeError):
+            # Handle masked values or other conversion errors
+            return 0.0
         
         # Apply normalization
         if self._normalization_min is None or self._normalization_max is None:
+            logger.warning(f"Normalization range not set: min={self._normalization_min}, max={self._normalization_max}")
             return 0.0
+        
+        # Check if min > max (shouldn't happen, but handle it)
+        if self._normalization_min > self._normalization_max:
+            logger.error(f"Invalid normalization range: min={self._normalization_min} > max={self._normalization_max}, swapping")
+            self._normalization_min, self._normalization_max = self._normalization_max, self._normalization_min
         
         # Clamp to percentile range
         clamped_value = max(self._normalization_min, min(raw_value, self._normalization_max))
@@ -240,8 +290,16 @@ class WaveformModel:
         # Map to 0..1
         if self._normalization_max == self._normalization_min:
             normalized = 0.5  # Avoid division by zero
+            logger.warning(f"Normalization range is zero (min=max={self._normalization_min:.6f}), returning 0.5")
         else:
             normalized = (clamped_value - self._normalization_min) / (self._normalization_max - self._normalization_min)
+            # Only log if normalized is at extremes and raw value was clamped (potential issue)
+            if normalized >= 0.999 and clamped_value != raw_value:
+                logger.debug(f"Normalization at upper limit: raw={raw_value:.6f}, clamped={clamped_value:.6f}, "
+                            f"min={self._normalization_min:.6f}, max={self._normalization_max:.6f}, normalized={normalized:.6f}")
+            elif normalized <= 0.001 and clamped_value != raw_value:
+                logger.debug(f"Normalization at lower limit: raw={raw_value:.6f}, clamped={clamped_value:.6f}, "
+                            f"min={self._normalization_min:.6f}, max={self._normalization_max:.6f}, normalized={normalized:.6f}")
         
         # Ensure output is 0..1 (handle any floating point issues)
         normalized = max(0.0, min(1.0, normalized))
