@@ -1,3 +1,22 @@
+// TFT Display includes
+#include <TFT_eSPI.h>
+TFT_eSPI tft = TFT_eSPI();
+
+#include <TFT_eWidget.h>               // Widget library
+
+GraphWidget gr = GraphWidget(&tft);    // Graph widget gr instance with pointer to tft
+TraceWidget tr = TraceWidget(&gr);     // Graph trace tr with pointer to gr
+
+// Graph configuration
+const float gxLow  = 0.0;
+const float gxHigh = 200.0;            // X-axis: number of data points
+const float gyLow  = 0.0;              // Y-axis: minimum value (0)
+const float gyHigh = 1.0;              // Y-axis: maximum value (1.0 for normalized values)
+
+// Graph state
+float graphX = 0.0;                     // Current X position on graph
+bool graphInitialized = false;
+
 // Configuration constants
 #define VIBRATION_MOTOR_PIN 25  // PWM pin for vibration motor (GPIO 25 - safe for ESP32)
 // Note: Avoid pins 0, 2, 4, 12-15, 25-27 if using display
@@ -57,6 +76,22 @@ void handleSerialValue(float value, String timestamp) {
   lastSerialCharTime = millis();  // Update timestamp
   
   Serial.printf("Received Serial: value=%.6f, PWM=%d\n", value, pwmValue);
+  
+  // Add point to graph if initialized
+  if (graphInitialized) {
+    tr.addPoint(graphX, value);
+    graphX += 1.0;
+    
+    // If the end of the graph x axis is reached, reset and start a new trace
+    if (graphX > gxHigh) {
+      graphX = 0.0;
+      
+      // Draw empty graph to clear old one
+      gr.drawGraph(10, 5);
+      // Start new trace
+      tr.startTrace(TFT_RED);
+    }
+  }
 }
 
 // Process Serial message
@@ -194,6 +229,35 @@ void setup() {
   Serial.println("Supports: Serial (value,timestamp format)");
   Serial.println("==========================================");
   
+  // Initialize TFT display
+  tft.init();
+  tft.setRotation(3);  // Landscape orientation
+  tft.fillScreen(TFT_BLACK);
+  
+  // Enable backlight (pin 4 for TTGO T-Display)
+  pinMode(4, OUTPUT);
+  digitalWrite(4, HIGH);
+  
+  // Graph area is 220 pixels wide, 120 pixels high, dark grey background
+  gr.createGraph(220, 120, tft.color565(5, 5, 5));
+  
+  // X scale units is from 0 to 200 (data points), y scale units is 0 to 1 (normalized values)
+  gr.setGraphScale(gxLow, gxHigh, gyLow, gyHigh);
+  
+  // X grid starts at 0 with lines every 20 x-scale units
+  // Y grid starts at 0 with lines every 0.1 y-scale units
+  // blue grid
+  gr.setGraphGrid(gxLow, 20.0, gyLow, 0.1, TFT_BLUE);
+  
+  // Draw empty graph, top left corner at pixel coordinate 10,5 on TFT
+  gr.drawGraph(10, 5);
+  
+  // Start a trace with red color
+  tr.startTrace(TFT_RED);
+  
+  graphInitialized = true;
+  graphX = 0.0;
+  
   // Reserve buffer space
   serialBuffer.reserve(SERIAL_BUFFER_SIZE);
   
@@ -210,6 +274,7 @@ void setup() {
   ledcWrite(VIBRATION_MOTOR_PIN, 0);
   
   Serial.println("Vibration motor initialized on GPIO 25");
+  Serial.println("TFT display and graph initialized");
 }
 
 void loop() {
