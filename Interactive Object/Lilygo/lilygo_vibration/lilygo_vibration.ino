@@ -9,6 +9,7 @@ TFT_eSPI tft = TFT_eSPI();
 #include <FS.h>
 using fs::FS;
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
 WiFiManager wm;
 
@@ -36,6 +37,10 @@ bool wifiConnected = false;              // Track WiFi connection status
 bool lastWifiConnected = false;         // Last WiFi connection state (for update detection)
 String lastWifiStatusText = "";         // Last WiFi status text displayed (for update detection)
 
+// OSC configuration
+const char* OSC_PATH = "/red_dust/osc_object_1";  // OSC path to listen for
+#define OSC_PORT 8000  // UDP port for OSC messages
+
 // Configuration constants
 #define VIBRATION_MOTOR_PIN 25  // PWM pin for vibration motor (GPIO 25 - safe for ESP32)
 // Note: Avoid pins 0, 2, 4, 12-15, 25-27 if using display
@@ -58,6 +63,14 @@ bool serialConnected = false;  // Track if Serial port is open/connected (has re
 bool serialReceivingData = false;  // Track if Serial is actively receiving data
 const unsigned long SERIAL_RECEIVING_TIMEOUT = 100;  // Consider "receiving" if data within last 100ms
 
+// OSC communication configuration
+WiFiUDP udp;
+const int OSC_BUFFER_SIZE = 256;
+uint8_t oscBuffer[OSC_BUFFER_SIZE];
+bool oscReceivingData = false;  // Track if OSC is actively receiving data
+unsigned long lastOscTime = 0;
+const unsigned long OSC_RECEIVING_TIMEOUT = 100;  // Consider "receiving" if data within last 100ms
+
 int currentPWM = 0;  // Current PWM value from Serial data
 bool hasPWMData = false;  // Whether we have valid PWM data to output
 
@@ -76,32 +89,32 @@ int mapValueToPWM(float value) {
   return constrain(pwmValue, PWM_MIN, PWM_MAX);
 }
 
-// Handle Serial value (normalized 0..1)
-void handleSerialValue(float value, String timestamp) {
+// Handle value from any source (Serial or OSC) - normalized 0..1
+void handleValue(float value, String timestamp, const char* source) {
   // Validate value is a valid number (not NaN or infinity)
   if (isnan(value) || isinf(value)) {
-    Serial.println("Error: Invalid value (NaN or infinity), ignoring");
+    Serial.printf("Error: Invalid value (NaN or infinity) from %s, ignoring\n", source);
     return;
   }
   
-  // Clamp value to 0..1 range
+  // Clamp value to 0..1 range (strictly enforce limits)
   value = constrain(value, 0.0, 1.0);
   
-  // Store latest value for display
-  latestValue = value;
+  // Store latest value for display (already constrained)
+  latestValue = constrain(value, 0.0, 1.0);
   
   // Map value to PWM
   int pwmValue = mapValueToPWM(value);
   currentPWM = pwmValue;
   hasPWMData = true;
-  serialReceivingData = true;  // Mark as currently receiving
-  lastSerialCharTime = millis();  // Update timestamp
   
-  Serial.printf("Received Serial: value=%.6f, PWM=%d\n", value, pwmValue);
+  Serial.printf("Received %s: value=%.6f, PWM=%d\n", source, value, pwmValue);
   
   // Add point to graph if initialized
+  // Ensure value is constrained to 0..1 before adding to graph
   if (graphInitialized) {
-    tr.addPoint(graphX, value);
+    float graphValue = constrain(value, 0.0, 1.0);
+    tr.addPoint(graphX, graphValue);
     graphX += 1.0;
     
     // If the end of the graph x axis is reached, reset and start a new trace
@@ -114,6 +127,13 @@ void handleSerialValue(float value, String timestamp) {
       tr.startTrace(TFT_RED);
     }
   }
+}
+
+// Handle Serial value (normalized 0..1)
+void handleSerialValue(float value, String timestamp) {
+  serialReceivingData = true;  // Mark as currently receiving
+  lastSerialCharTime = millis();  // Update timestamp
+  handleValue(value, timestamp, "Serial");
 }
 
 // Process Serial message
@@ -232,6 +252,119 @@ bool isSerialReceiving() {
   return serialReceivingData;
 }
 
+// Helper function to align to 4-byte boundary (OSC requirement)
+int alignTo4Bytes(int offset) {
+  return (offset + 3) & ~3;
+}
+
+// Parse OSC message and extract float and string
+bool parseOSCMessage(uint8_t* buffer, int packetSize, float* outValue, String* outTimestamp) {
+  if (packetSize < 8) return false;  // Minimum size for path
+  
+  int offset = 0;
+  
+  // Read path (null-terminated string, padded to 4-byte boundary)
+  String path = "";
+  while (offset < packetSize && buffer[offset] != 0) {
+    path += (char)buffer[offset];
+    offset++;
+  }
+  offset = alignTo4Bytes(offset + 1);  // Skip null terminator and align
+  
+  // Check if path matches
+  if (path != OSC_PATH) {
+    return false;  // Not our message
+  }
+  
+  if (offset >= packetSize) return false;
+  
+  // Read type tag (starts with ',', null-terminated, padded to 4-byte boundary)
+  if (buffer[offset] != ',') return false;  // Must start with comma
+  offset++;
+  
+  String typeTag = "";
+  while (offset < packetSize && buffer[offset] != 0) {
+    typeTag += (char)buffer[offset];
+    offset++;
+  }
+  offset = alignTo4Bytes(offset + 1);  // Skip null terminator and align
+  
+  // Check type tag is ",fs" (float, string)
+  if (typeTag != "fs") {
+    return false;  // Wrong type tag
+  }
+  
+  // Read float (4 bytes, big-endian)
+  if (offset + 4 > packetSize) return false;
+  
+  union {
+    uint8_t bytes[4];
+    float value;
+  } floatUnion;
+  
+  // Convert from big-endian to little-endian
+  floatUnion.bytes[3] = buffer[offset];
+  floatUnion.bytes[2] = buffer[offset + 1];
+  floatUnion.bytes[1] = buffer[offset + 2];
+  floatUnion.bytes[0] = buffer[offset + 3];
+  
+  *outValue = floatUnion.value;
+  offset += 4;
+  
+  // Read string (null-terminated, padded to 4-byte boundary)
+  if (offset >= packetSize) return false;
+  
+  String timestamp = "";
+  while (offset < packetSize && buffer[offset] != 0) {
+    timestamp += (char)buffer[offset];
+    offset++;
+  }
+  *outTimestamp = timestamp;
+  
+  return true;
+}
+
+// Process incoming OSC messages
+void processOSCMessages() {
+  // Only process if WiFi is connected
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+  
+  // Check for incoming UDP packets
+  int packetSize = udp.parsePacket();
+  if (packetSize > 0) {
+    // Limit packet size to our buffer
+    if (packetSize > OSC_BUFFER_SIZE) {
+      Serial.printf("OSC packet too large: %d bytes\n", packetSize);
+      return;
+    }
+    
+    // Read packet into buffer
+    int len = udp.read(oscBuffer, OSC_BUFFER_SIZE);
+    if (len > 0) {
+      oscReceivingData = true;
+      lastOscTime = millis();
+      
+      // Parse OSC message
+      float value;
+      String timestamp;
+      
+      if (parseOSCMessage(oscBuffer, len, &value, &timestamp)) {
+        // Valid OSC message - process it
+        handleValue(value, timestamp, "OSC");
+      } else {
+        Serial.println("Failed to parse OSC message");
+      }
+    }
+  }
+  
+  // Check if we're still "receiving" (data within last 100ms)
+  if (oscReceivingData && (millis() - lastOscTime) > OSC_RECEIVING_TIMEOUT) {
+    oscReceivingData = false;
+  }
+}
+
 // Update status text display
 void updateStatusText() {
   // Build WiFi status text
@@ -301,10 +434,12 @@ void updateStatusText() {
   }
   
   // Right: Latest value (right-aligned, starting around 170px)
+  // Ensure value is constrained to 0..1 before display
+  float displayValue = constrain(latestValue, 0.0, 1.0);
   tft.setCursor(170, 5);
   tft.setTextColor(TFT_WHITE, TFT_BLACK, true);
   // tft.print("Val: ");
-  tft.print(latestValue, 3);  // 3 decimal places
+  tft.print(displayValue, 3);  // 3 decimal places
   
   // Update last displayed states
   lastSerialConnected = serialConnected;
@@ -330,7 +465,7 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("\nArduino Vibration Motor Controller");
-  Serial.println("Supports: Serial (value,timestamp format)");
+  Serial.println("Supports: Serial (value,timestamp format) and OSC");
   Serial.println("==========================================");
   
   // Initialize WiFi Manager
@@ -345,6 +480,10 @@ void setup() {
   if(wm.autoConnect("AutoConnectAP")){
     Serial.println("WiFi connected...yeey :)");
     wifiConnected = true;
+    
+    // Initialize UDP for OSC
+    udp.begin(OSC_PORT);
+    Serial.printf("OSC listening on UDP port %d, path: %s\n", OSC_PORT, OSC_PATH);
   }
   else {
     Serial.println("WiFi Configportal running");
@@ -426,9 +565,18 @@ void loop() {
     wifiConnected = currentWifiStatus;
     if (wifiConnected) {
       Serial.println("WiFi connected");
+      // Initialize UDP for OSC
+      udp.begin(OSC_PORT);
+      Serial.printf("OSC listening on UDP port %d, path: %s\n", OSC_PORT, OSC_PATH);
     } else {
       Serial.println("WiFi disconnected");
     }
+  }
+  
+  // Process OSC messages (non-blocking, runs in parallel with Serial)
+  // Serial has priority, but OSC can still be processed when WiFi is connected
+  if (wifiConnected) {
+    processOSCMessages();
   }
   
   // Update status text display
