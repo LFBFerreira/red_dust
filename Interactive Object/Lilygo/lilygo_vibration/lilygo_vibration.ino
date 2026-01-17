@@ -17,6 +17,12 @@ const float gyHigh = 1.0;              // Y-axis: maximum value (1.0 for normali
 float graphX = 0.0;                     // Current X position on graph
 bool graphInitialized = false;
 
+// Status display state
+float latestValue = 0.0;                 // Latest received value for display
+bool lastSerialConnected = false;        // Last connection state (for update detection)
+bool lastSerialReceiving = false;       // Last receiving state (for update detection)
+float lastDisplayedValue = -1.0;        // Last displayed value (for update detection)
+
 // Configuration constants
 #define VIBRATION_MOTOR_PIN 25  // PWM pin for vibration motor (GPIO 25 - safe for ESP32)
 // Note: Avoid pins 0, 2, 4, 12-15, 25-27 if using display
@@ -68,6 +74,9 @@ void handleSerialValue(float value, String timestamp) {
   // Clamp value to 0..1 range
   value = constrain(value, 0.0, 1.0);
   
+  // Store latest value for display
+  latestValue = value;
+  
   // Map value to PWM
   int pwmValue = mapValueToPWM(value);
   currentPWM = pwmValue;
@@ -86,8 +95,8 @@ void handleSerialValue(float value, String timestamp) {
     if (graphX > gxHigh) {
       graphX = 0.0;
       
-      // Draw empty graph to clear old one
-      gr.drawGraph(10, 5);
+      // Draw empty graph to clear old one (positioned below status text)
+      gr.drawGraph(10, 25);
       // Start new trace
       tr.startTrace(TFT_RED);
     }
@@ -210,6 +219,60 @@ bool isSerialReceiving() {
   return serialReceivingData;
 }
 
+// Update status text display
+void updateStatusText() {
+  // Check if we need to update the display
+  bool needsUpdate = false;
+  if (serialConnected != lastSerialConnected || 
+      serialReceivingData != lastSerialReceiving ||
+      abs(latestValue - lastDisplayedValue) > 0.0001) {
+    needsUpdate = true;
+  }
+  
+  if (!needsUpdate) {
+    return;
+  }
+  
+  // Set text properties
+  tft.setTextFont(2);  // Use built-in font 2 (small, readable)
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK, true);  // White text, black background with fill
+  
+  // Clear status area (top 20 pixels, full width)
+  tft.fillRect(0, 0, 240, 20, TFT_BLACK);
+  
+  // Left: Connection status (5px from left)
+  tft.setCursor(5, 5);
+  if (serialConnected) {
+    tft.setTextColor(TFT_GREEN, TFT_BLACK, true);
+    tft.print("Connected");
+  } else {
+    tft.setTextColor(TFT_RED, TFT_BLACK, true);
+    tft.print("Disconnected");
+  }
+  
+  // Center: Active status (centered around 120px)
+  tft.setCursor(100, 5);
+  if (serialReceivingData) {
+    tft.setTextColor(TFT_CYAN, TFT_BLACK, true);
+    tft.print("Active");
+  } else {
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK, true);
+    tft.print("Idle");
+  }
+  
+  // Right: Latest value (right-aligned, starting around 170px)
+  tft.setCursor(170, 5);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK, true);
+  tft.print("Val: ");
+  tft.print(latestValue, 3);  // 3 decimal places
+  
+  // Update last displayed states
+  lastSerialConnected = serialConnected;
+  lastSerialReceiving = serialReceivingData;
+  lastDisplayedValue = latestValue;
+}
+
 // Update vibration motor PWM based on received data
 void updateVibrationMotor() {
   if (hasPWMData) {
@@ -238,8 +301,9 @@ void setup() {
   pinMode(4, OUTPUT);
   digitalWrite(4, HIGH);
   
-  // Graph area is 220 pixels wide, 120 pixels high, dark grey background
-  gr.createGraph(220, 120, tft.color565(5, 5, 5));
+  // Graph area is 220 pixels wide, 110 pixels high, dark grey background
+  // Reduced height to make room for status text at top
+  gr.createGraph(220, 110, tft.color565(5, 5, 5));
   
   // X scale units is from 0 to 200 (data points), y scale units is 0 to 1 (normalized values)
   gr.setGraphScale(gxLow, gxHigh, gyLow, gyHigh);
@@ -249,14 +313,22 @@ void setup() {
   // blue grid
   gr.setGraphGrid(gxLow, 20.0, gyLow, 0.1, TFT_BLUE);
   
-  // Draw empty graph, top left corner at pixel coordinate 10,5 on TFT
-  gr.drawGraph(10, 5);
+  // Draw empty graph, top left corner at pixel coordinate 10,25 on TFT
+  // Positioned below status text area (top 20 pixels)
+  gr.drawGraph(10, 25);
   
   // Start a trace with red color
   tr.startTrace(TFT_RED);
   
   graphInitialized = true;
   graphX = 0.0;
+  
+  // Initialize status display
+  latestValue = 0.0;
+  lastSerialConnected = false;
+  lastSerialReceiving = false;
+  lastDisplayedValue = -1.0;
+  updateStatusText();  // Draw initial status
   
   // Reserve buffer space
   serialBuffer.reserve(SERIAL_BUFFER_SIZE);
@@ -283,6 +355,9 @@ void loop() {
   
   // Update vibration motor based on received data
   updateVibrationMotor();
+  
+  // Update status text display
+  updateStatusText();
   
   // Debug: Print status every 100 iterations
   loopCounter++;
