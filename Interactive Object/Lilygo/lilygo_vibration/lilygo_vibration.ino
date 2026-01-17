@@ -4,6 +4,14 @@ TFT_eSPI tft = TFT_eSPI();
 
 #include <TFT_eWidget.h>               // Widget library
 
+// WiFi Manager includes
+// Fix for ESP32 3.x - include FS.h and bring FS into global namespace
+#include <FS.h>
+using fs::FS;
+#include <WiFi.h>
+#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
+WiFiManager wm;
+
 GraphWidget gr = GraphWidget(&tft);    // Graph widget gr instance with pointer to tft
 TraceWidget tr = TraceWidget(&gr);     // Graph trace tr with pointer to gr
 
@@ -22,6 +30,11 @@ float latestValue = 0.0;                 // Latest received value for display
 bool lastSerialConnected = false;        // Last connection state (for update detection)
 bool lastSerialReceiving = false;       // Last receiving state (for update detection)
 float lastDisplayedValue = -1.0;        // Last displayed value (for update detection)
+
+// WiFi state
+bool wifiConnected = false;              // Track WiFi connection status
+bool lastWifiConnected = false;         // Last WiFi connection state (for update detection)
+String lastWifiStatusText = "";         // Last WiFi status text displayed (for update detection)
 
 // Configuration constants
 #define VIBRATION_MOTOR_PIN 25  // PWM pin for vibration motor (GPIO 25 - safe for ESP32)
@@ -221,11 +234,42 @@ bool isSerialReceiving() {
 
 // Update status text display
 void updateStatusText() {
+  // Build WiFi status text
+  String wifiStatusText = "";
+  int wifiStatusColor = TFT_WHITE;
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    // Connected - show IP address
+    wifiStatusText = WiFi.localIP().toString();
+    wifiStatusColor = TFT_GREEN;
+  } else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+    // Config portal active - show portal address
+    wifiStatusText = "Config: " + WiFi.softAPIP().toString();
+    wifiStatusColor = TFT_YELLOW;
+  } else {
+    // Trying to connect - show SSID if available
+    String ssid = WiFi.SSID();
+    if (ssid.length() > 0) {
+      wifiStatusText = "Connecting: " + ssid;
+    } else {
+      wifiStatusText = "Connecting...";
+    }
+    wifiStatusColor = TFT_CYAN;
+  }
+  
+  // Truncate WiFi status text if too long to prevent overlap (max ~14 chars to fit before center at 100px)
+  // Font 2 size 1 is ~6px per char, so 14 chars = 84px, leaving room before center text at 100px
+  if (wifiStatusText.length() > 14) {
+    wifiStatusText = wifiStatusText.substring(0, 11) + "...";
+  }
+  
   // Check if we need to update the display
   bool needsUpdate = false;
   if (serialConnected != lastSerialConnected || 
       serialReceivingData != lastSerialReceiving ||
-      abs(latestValue - lastDisplayedValue) > 0.0001) {
+      abs(latestValue - lastDisplayedValue) > 0.0001 ||
+      wifiStatusText != lastWifiStatusText ||
+      wifiConnected != lastWifiConnected) {
     needsUpdate = true;
   }
   
@@ -241,15 +285,10 @@ void updateStatusText() {
   // Clear status area (top 20 pixels, full width)
   tft.fillRect(0, 0, 240, 20, TFT_BLACK);
   
-  // Left: Connection status (5px from left)
+  // Left: WiFi Connection status (5px from left)
   tft.setCursor(5, 5);
-  if (serialConnected) {
-    tft.setTextColor(TFT_GREEN, TFT_BLACK, true);
-    tft.print("Connected");
-  } else {
-    tft.setTextColor(TFT_RED, TFT_BLACK, true);
-    tft.print("Disconnected");
-  }
+  tft.setTextColor(wifiStatusColor, TFT_BLACK, true);
+  tft.print(wifiStatusText);
   
   // Center: Active status (centered around 120px)
   tft.setCursor(100, 5);
@@ -264,13 +303,15 @@ void updateStatusText() {
   // Right: Latest value (right-aligned, starting around 170px)
   tft.setCursor(170, 5);
   tft.setTextColor(TFT_WHITE, TFT_BLACK, true);
-  tft.print("Val: ");
+  // tft.print("Val: ");
   tft.print(latestValue, 3);  // 3 decimal places
   
   // Update last displayed states
   lastSerialConnected = serialConnected;
   lastSerialReceiving = serialReceivingData;
   lastDisplayedValue = latestValue;
+  lastWifiStatusText = wifiStatusText;
+  lastWifiConnected = wifiConnected;
 }
 
 // Update vibration motor PWM based on received data
@@ -291,6 +332,24 @@ void setup() {
   Serial.println("\nArduino Vibration Motor Controller");
   Serial.println("Supports: Serial (value,timestamp format)");
   Serial.println("==========================================");
+  
+  // Initialize WiFi Manager
+  WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
+  
+  // Configure WiFiManager for non-blocking operation
+  wm.setConfigPortalBlocking(false);
+  wm.setConfigPortalTimeout(60);
+  
+  // Automatically connect using saved credentials if they exist
+  // If connection fails it starts an access point with the specified name
+  if(wm.autoConnect("AutoConnectAP")){
+    Serial.println("WiFi connected...yeey :)");
+    wifiConnected = true;
+  }
+  else {
+    Serial.println("WiFi Configportal running");
+    wifiConnected = false;
+  }
   
   // Initialize TFT display
   tft.init();
@@ -328,6 +387,8 @@ void setup() {
   lastSerialConnected = false;
   lastSerialReceiving = false;
   lastDisplayedValue = -1.0;
+  lastWifiConnected = wifiConnected;  // Initialize WiFi status tracking
+  lastWifiStatusText = "";  // Initialize WiFi status text tracking
   updateStatusText();  // Draw initial status
   
   // Reserve buffer space
@@ -350,21 +411,35 @@ void setup() {
 }
 
 void loop() {
-  // Process Serial messages
+  // Process Serial messages FIRST (Serial has priority)
   processSerialMessages();
   
   // Update vibration motor based on received data
   updateVibrationMotor();
   
+  // Process WiFi Manager (non-blocking, runs in parallel with Serial)
+  wm.process();
+  
+  // Update WiFi connection status
+  bool currentWifiStatus = (WiFi.status() == WL_CONNECTED);
+  if (currentWifiStatus != wifiConnected) {
+    wifiConnected = currentWifiStatus;
+    if (wifiConnected) {
+      Serial.println("WiFi connected");
+    } else {
+      Serial.println("WiFi disconnected");
+    }
+  }
+  
   // Update status text display
   updateStatusText();
   
   // Debug: Print status every 100 iterations
-  loopCounter++;
-  if (loopCounter % 100 == 0) {
-    Serial.printf("Loop running: iteration %lu, PWM=%d, hasData=%d\n", 
-                  loopCounter, currentPWM, hasPWMData);
-  }
+  // loopCounter++;
+  // if (loopCounter % 100 == 0) {
+  //   Serial.printf("Loop running: iteration %lu, PWM=%d, hasData=%d, WiFi=%s\n", 
+  //                 loopCounter, currentPWM, hasPWMData, wifiConnected ? "ON" : "OFF");
+  // }
   
   // Small delay to prevent watchdog issues
   delay(1);
