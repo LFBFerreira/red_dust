@@ -286,8 +286,9 @@ class PlaybackControls(QWidget):
         # Store time range for slider value conversion
         self._time_range = (start_time, end_time)
         
-        # Prevent feedback loop
+        # Prevent feedback loop by blocking signals during programmatic update
         self._position_slider_updating = True
+        self.position_slider.blockSignals(True)
         
         # Calculate position as percentage
         total_duration = (end_time - start_time)
@@ -296,8 +297,12 @@ class PlaybackControls(QWidget):
             percentage = elapsed / total_duration
             slider_value = int(percentage * 1000)  # 0-1000 range
             slider_value = max(0, min(1000, slider_value))  # Clamp
-            self.position_slider.setValue(slider_value)
+            
+            # Only update if the value actually changed to avoid unnecessary updates
+            if slider_value != self.position_slider.value():
+                self.position_slider.setValue(slider_value)
         
+        self.position_slider.blockSignals(False)
         self._position_slider_updating = False
     
     def get_pending_position(self) -> Optional[UTCDateTime]:

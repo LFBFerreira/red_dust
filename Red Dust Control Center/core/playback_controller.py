@@ -127,7 +127,19 @@ class PlaybackController(QObject):
         # This ensures playback continues from current position without restarting
         if self._state == "playing" and self._playback_start_time is not None and self._current_time is not None:
             from time import time as current_time
-            # Simply update the start position to current position and reset the timer
+            
+            # Ensure current_time is within valid range before updating
+            if self._waveform_model:
+                time_range = self._waveform_model.get_time_range()
+                if time_range:
+                    start_time, end_time = time_range
+                    # Clamp current_time to valid range
+                    if self._current_time < start_time:
+                        self._current_time = start_time
+                    elif self._current_time > end_time:
+                        self._current_time = end_time
+            
+            # Update the start position to current position and reset the timer
             # This way playback continues from where it is, just at a different speed
             self._playback_start_position = self._current_time
             self._playback_start_time = current_time()
@@ -259,17 +271,46 @@ class PlaybackController(QObject):
         
         start_time, end_time = time_range
         
+        # Clamp new_time to valid range first to prevent issues at high speeds
+        if new_time < start_time:
+            new_time = start_time
+        elif new_time > end_time:
+            new_time = end_time
+        
         # Handle loop or end of data
         if self._loop_enabled and self._loop_start and self._loop_end:
-            if new_time > self._loop_end:
-                # Loop back to start
+            loop_length = (self._loop_end - self._loop_start)
+            if loop_length <= 0:
+                # Invalid loop range, just use clamped new_time
+                self._current_time = new_time
+            elif new_time > self._loop_end:
+                # Calculate how far past the loop end we went
+                excess = new_time - self._loop_end
+                # Wrap the excess back into the loop range
+                # Use modulo to handle cases where excess > loop_length (multiple loops)
+                excess_seconds = excess.total_seconds()
+                loop_length_seconds = loop_length.total_seconds()
+                if loop_length_seconds > 0:
+                    wrapped_seconds = excess_seconds % loop_length_seconds
+                    self._current_time = self._loop_start + wrapped_seconds
+                    # Update playback start to maintain continuity
+                    self._playback_start_position = self._current_time
+                    self._playback_start_time = current_time()
+                else:
+                    # Fallback: just reset to start
+                    self._current_time = self._loop_start
+                    self._playback_start_position = self._loop_start
+                    self._playback_start_time = current_time()
+            elif new_time < self._loop_start:
+                # Handle case where we went backwards past loop start (shouldn't happen, but be safe)
                 self._current_time = self._loop_start
                 self._playback_start_position = self._loop_start
                 self._playback_start_time = current_time()
             else:
                 self._current_time = new_time
         else:
-            if new_time > end_time:
+            # No loop: clamp to end_time and stop if we've reached the end
+            if new_time >= end_time:
                 # Reached end, stop playback
                 self._current_time = end_time
                 self.stop()

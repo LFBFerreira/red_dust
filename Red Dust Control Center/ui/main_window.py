@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QMenuBar, QFileDialog, QMessageBox)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from pathlib import Path
+from obspy import UTCDateTime
 import logging
 
 from core.data_manager import DataManager
@@ -526,6 +527,10 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
     
     def _on_position_slider_changed(self, value: int) -> None:
         """Handle position slider change."""
+        # Ignore if slider is being updated programmatically
+        if self.playback_controls._position_slider_updating:
+            return
+        
         # Get time range
         time_range = self.waveform_model.get_time_range()
         if not time_range:
@@ -535,12 +540,29 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
         
         # Convert slider value to timestamp
         percentage = value / 1000.0  # 0.0 to 1.0
-        total_duration = (end_time - start_time)
+        total_duration = (end_time - start_time)  # This is already a float (seconds)
         if total_duration <= 0:
             return
         
         offset = total_duration * percentage
         target_timestamp = start_time + offset
+        
+        # Check if the target is significantly different from current position
+        # This prevents oscillation from precision issues
+        current_time = self.playback_controller.get_current_timestamp()
+        if current_time is not None:
+            # Subtracting two UTCDateTime objects returns a float (seconds)
+            # If current_time is not a UTCDateTime, convert it first
+            if not isinstance(current_time, UTCDateTime):
+                current_time = UTCDateTime(current_time)
+            # Calculate time difference in seconds (subtraction of UTCDateTime returns float)
+            time_diff = abs((target_timestamp - current_time))
+            # Only seek if the difference is more than 0.1% of the total duration
+            # This prevents oscillation from rounding errors
+            # total_duration is already in seconds (float), no need for .total_seconds()
+            min_diff = total_duration * 0.001
+            if time_diff < min_diff:
+                return  # Too close, skip to avoid oscillation
         
         # Seek to the new position
         self.playback_controller.seek(target_timestamp)
@@ -745,13 +767,12 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
             card.set_streaming_state(streaming)
         logger.debug(f"Object {name} streaming: {'started' if streaming else 'stopped'}")
     
-    def _on_object_value_updated(self, name: str, remapped_value: float):
+    def _on_object_value_updated(self, name: str, normalized_value: float):
         """Handle object value update for UI display."""
         card = self.object_cards.get_card(name)
         if card:
-            obj = self.osc_manager.get_object(name)
-            if obj:
-                card.update_value(remapped_value, obj.remap_min, obj.remap_max)
+            # Pass normalized value - card will remap it using its own min/max settings
+            card.update_value(normalized_value)
     
     def _on_object_connection_state_changed(self, name: str, connected: bool):
         """Handle object connection state change (for Serial objects)."""

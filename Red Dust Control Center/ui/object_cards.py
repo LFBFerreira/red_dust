@@ -128,6 +128,7 @@ class ObjectCard(QFrame):
         self.remap_min_spinbox.setRange(-1000000.0, 1000000.0)
         self.remap_min_spinbox.setValue(0.0)
         self.remap_min_spinbox.setDecimals(3)
+        self.remap_min_spinbox.setSingleStep(0.05)
         # Validate and commit only when user finishes editing (Enter or focus loss)
         self.remap_min_spinbox.editingFinished.connect(self._on_remap_min_finished)
         remap_min_layout.addWidget(self.remap_min_spinbox)
@@ -140,6 +141,7 @@ class ObjectCard(QFrame):
         self.remap_max_spinbox.setRange(-1000000.0, 1000000.0)
         self.remap_max_spinbox.setValue(1.0)
         self.remap_max_spinbox.setDecimals(3)
+        self.remap_max_spinbox.setSingleStep(0.05)
         # Validate and commit only when user finishes editing (Enter or focus loss)
         self.remap_max_spinbox.editingFinished.connect(self._on_remap_max_finished)
         remap_max_layout.addWidget(self.remap_max_spinbox)
@@ -510,22 +512,34 @@ class ObjectCard(QFrame):
                 }
             """)
     
-    def update_value(self, remapped_value: float, remap_min: float, remap_max: float) -> None:
+    def update_value(self, normalized_value: float, remap_min: float = None, remap_max: float = None) -> None:
         """
         Update value display with remapped value.
         
         Args:
-            remapped_value: The remapped value to display
-            remap_min: Minimum remapping value
-            remap_max: Maximum remapping value
+            normalized_value: The normalized value (0-1) from the waveform
+            remap_min: Minimum remapping value (uses card's own if None)
+            remap_max: Maximum remapping value (uses card's own if None)
         """
-        # Calculate percentage for progress bar visual (0-100%)
+        # Use card's own remap_min and remap_max if not provided
+        if remap_min is None:
+            remap_min = self.remap_min_spinbox.value()
+        if remap_max is None:
+            remap_max = self.remap_max_spinbox.value()
+        
+        # Remap the normalized value using this card's min/max settings
+        # Clamp normalized value to 0..1
+        normalized_value = max(0.0, min(1.0, normalized_value))
+        
+        # Handle edge case where min == max
         if remap_max == remap_min:
+            remapped_value = remap_min
             percentage = 50.0  # Middle if range is zero
         else:
-            # Normalize remapped value back to 0-1 range for display
-            normalized = (remapped_value - remap_min) / (remap_max - remap_min)
-            percentage = max(0.0, min(100.0, normalized * 100.0))
+            # Linear remapping: output = min + (normalized * (max - min))
+            remapped_value = remap_min + (normalized_value * (remap_max - remap_min))
+            # Calculate percentage for progress bar visual (0-100%)
+            percentage = max(0.0, min(100.0, normalized_value * 100.0))
         
         # Update progress bar value (for visual bar)
         self.value_progress.setValue(int(percentage))

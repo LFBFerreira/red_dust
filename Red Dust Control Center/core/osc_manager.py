@@ -31,7 +31,7 @@ class OSCManager(QObject):
     object_streaming_state_changed = Signal(str, bool)  # Emits (object_name, streaming)
     
     # Signal emitted when object value is updated (for UI display)
-    object_value_updated = Signal(str, float)  # Emits (object_name, remapped_value)
+    object_value_updated = Signal(str, float)  # Emits (object_name, normalized_value)
     
     # Signal emitted when object connection state changes (for Serial objects)
     object_connection_state_changed = Signal(str, bool)  # Emits (object_name, connected)
@@ -270,9 +270,9 @@ class OSCManager(QObject):
                 obj = self._objects[name]
                 normalized_zero = 0.0
                 remapped_zero = obj.send(normalized_zero, current_time)
-                # Emit value update signal for UI
+                # Emit value update signal for UI (emit normalized value so card can remap using its own settings)
                 if remapped_zero is not None:
-                    self.object_value_updated.emit(name, remapped_zero)
+                    self.object_value_updated.emit(name, normalized_zero)
                 
                 # Stop timer if no objects are streaming
                 if not any(obj.streaming_enabled for obj in self._objects.values()):
@@ -361,7 +361,7 @@ class OSCManager(QObject):
         for obj in self._objects.values():
             if obj.streaming_enabled:
                 remapped_value = obj.send(normalized_value, current_time)
-                # Emit signal for UI updates
+                # Emit signal for UI updates (emit normalized value so card can remap using its own settings)
                 if remapped_value is not None:
-                    self.object_value_updated.emit(obj.name, remapped_value)
+                    self.object_value_updated.emit(obj.name, normalized_value)
 
