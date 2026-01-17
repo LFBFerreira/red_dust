@@ -1,9 +1,16 @@
 // Configuration constants
-#define VIBRATION_MOTOR_PIN 9  // PWM pin for vibration motor (change as needed)
+#define VIBRATION_MOTOR_PIN 25  // PWM pin for vibration motor (GPIO 25 - safe for ESP32)
+// Note: Avoid pins 0, 2, 4, 12-15, 25-27 if using display
+// GPIO 25 is typically safe for PWM on TTGO T-Display
 
 // PWM mapping configuration
 #define PWM_MIN 0      // Minimum PWM value (motor off)
 #define PWM_MAX 255    // Maximum PWM value (full intensity)
+
+// ESP32 LEDC PWM configuration
+#define PWM_FREQUENCY 5000    // PWM frequency in Hz (5kHz is good for motors)
+#define PWM_RESOLUTION 8      // 8-bit resolution (0-255)
+#define PWM_CHANNEL 0         // LEDC channel (0-15)
 
 // Serial communication configuration
 String serialBuffer = "";
@@ -169,11 +176,11 @@ bool isSerialReceiving() {
 // Update vibration motor PWM based on received data
 void updateVibrationMotor() {
   if (hasPWMData) {
-    // We have PWM data - output it
-    analogWrite(VIBRATION_MOTOR_PIN, currentPWM);
+    // We have PWM data - output it using LEDC
+    ledcWrite(PWM_CHANNEL, currentPWM);
   } else {
     // No data yet - turn off motor
-    analogWrite(VIBRATION_MOTOR_PIN, 0);
+    ledcWrite(PWM_CHANNEL, 0);
   }
 }
 
@@ -194,9 +201,15 @@ void setup() {
   currentPWM = 0;
   hasPWMData = false;
   
-  // Initialize vibration motor pin
-  pinMode(VIBRATION_MOTOR_PIN, OUTPUT);
-  analogWrite(VIBRATION_MOTOR_PIN, 0);  // Start with motor off
+  // Initialize vibration motor pin with ESP32 LEDC PWM
+  // Configure LEDC channel
+  ledcSetup(PWM_CHANNEL, PWM_FREQUENCY, PWM_RESOLUTION);
+  // Attach pin to LEDC channel
+  ledcAttachPin(VIBRATION_MOTOR_PIN, PWM_CHANNEL);
+  // Start with motor off
+  ledcWrite(PWM_CHANNEL, 0);
+  
+  Serial.println("Vibration motor initialized on GPIO 25");
 }
 
 void loop() {
