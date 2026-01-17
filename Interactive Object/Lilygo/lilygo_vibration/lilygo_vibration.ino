@@ -7,10 +7,9 @@
 #define PWM_MIN 0      // Minimum PWM value (motor off)
 #define PWM_MAX 255    // Maximum PWM value (full intensity)
 
-// ESP32 LEDC PWM configuration
+// ESP32 LEDC PWM configuration (for ESP32 Arduino core 3.x)
 #define PWM_FREQUENCY 5000    // PWM frequency in Hz (5kHz is good for motors)
 #define PWM_RESOLUTION 8      // 8-bit resolution (0-255)
-#define PWM_CHANNEL 0         // LEDC channel (0-15)
 
 // Serial communication configuration
 String serialBuffer = "";
@@ -23,6 +22,9 @@ const unsigned long SERIAL_RECEIVING_TIMEOUT = 100;  // Consider "receiving" if 
 
 int currentPWM = 0;  // Current PWM value from Serial data
 bool hasPWMData = false;  // Whether we have valid PWM data to output
+
+// Loop iteration counter for debug messages
+unsigned long loopCounter = 0;
 
 // Function to map normalized value (0..1) to PWM value
 int mapValueToPWM(float value) {
@@ -176,11 +178,11 @@ bool isSerialReceiving() {
 // Update vibration motor PWM based on received data
 void updateVibrationMotor() {
   if (hasPWMData) {
-    // We have PWM data - output it using LEDC
-    ledcWrite(PWM_CHANNEL, currentPWM);
+    // We have PWM data - output it using LEDC (ESP32 3.x API uses pin number)
+    ledcWrite(VIBRATION_MOTOR_PIN, currentPWM);
   } else {
     // No data yet - turn off motor
-    ledcWrite(PWM_CHANNEL, 0);
+    ledcWrite(VIBRATION_MOTOR_PIN, 0);
   }
 }
 
@@ -201,13 +203,11 @@ void setup() {
   currentPWM = 0;
   hasPWMData = false;
   
-  // Initialize vibration motor pin with ESP32 LEDC PWM
-  // Configure LEDC channel
-  ledcSetup(PWM_CHANNEL, PWM_FREQUENCY, PWM_RESOLUTION);
-  // Attach pin to LEDC channel
-  ledcAttachPin(VIBRATION_MOTOR_PIN, PWM_CHANNEL);
+  // Initialize vibration motor pin with ESP32 LEDC PWM (ESP32 3.x API)
+  // Attach pin to LEDC with frequency and resolution (auto-assigns channel)
+  ledcAttach(VIBRATION_MOTOR_PIN, PWM_FREQUENCY, PWM_RESOLUTION);
   // Start with motor off
-  ledcWrite(PWM_CHANNEL, 0);
+  ledcWrite(VIBRATION_MOTOR_PIN, 0);
   
   Serial.println("Vibration motor initialized on GPIO 25");
 }
@@ -218,6 +218,13 @@ void loop() {
   
   // Update vibration motor based on received data
   updateVibrationMotor();
+  
+  // Debug: Print status every 100 iterations
+  loopCounter++;
+  if (loopCounter % 100 == 0) {
+    Serial.printf("Loop running: iteration %lu, PWM=%d, hasData=%d\n", 
+                  loopCounter, currentPWM, hasPWMData);
+  }
   
   // Small delay to prevent watchdog issues
   delay(1);
