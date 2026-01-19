@@ -18,7 +18,7 @@
 3. Rename the folder to `TFT_eSPI` (if not already)
 4. Copy the folder to: `C:\Users\<Your User Name>\Documents\Arduino\libraries\`
 
-#### Install TFT_eWidget Library (Optional, for GUI widgets)
+#### Install TFT_eWidget Library
 
 **Option A: Using Arduino Library Manager**
 1. In Arduino IDE, go to **Sketch → Include Library → Manage Libraries...**
@@ -110,6 +110,34 @@ Arduino IDE includes a specific board definition for the LilyGo T-Display, which
 This project controls a vibration motor based on data received from a computer or another device. Think of it like a volume control for vibration - when you send a number between 0 and 1 (where 0 means no vibration and 1 means maximum vibration), the device converts that number into a vibration intensity. 
 
 The device listens for messages sent over the USB connection in a simple format: a number followed by a timestamp. When it receives a message, it immediately adjusts the vibration motor's strength to match that number. For example, if you send 0.5, the motor will vibrate at half intensity. If you send 0, it stops vibrating completely. The device continuously updates the vibration in real-time as new messages arrive, creating a responsive haptic feedback system.
+
+## Configuration
+
+The `settings.h` file allows you to configure the most important settings for the device without modifying the main code. This makes it easy to customize the behavior for your specific needs.
+
+### Available Settings
+
+- **Serial Communication:**
+  - `SERIAL_BAUDRATE`: Serial communication baud rate (default: 115200)
+
+- **OSC Configuration:**
+  - `OSC_PATH`: OSC message path to listen for (default: "/red_dust/osc_object_1")
+  - `OSC_PORT`: UDP port for OSC messages (default: 8000)
+
+- **Hardware Configuration:**
+  - `VIBRATION_MOTOR_PIN`: GPIO pin for the vibration motor (default: 25)
+
+- **PWM Settings:**
+  - `PWM_MIN`: Minimum PWM value - motor off (default: 0)
+  - `PWM_MAX`: Maximum PWM value - full intensity (default: 255)
+  - `PWM_FREQUENCY`: PWM frequency in Hz (default: 5000)
+  - `PWM_RESOLUTION`: PWM bit resolution (default: 8)
+
+- **Display Colors:**
+  - `GRAPH_GRID_COLOR`: Color for graph grid lines (default: TFT_BLUE)
+  - `GRAPH_TRACE_COLOR`: Color for graph trace line (default: TFT_RED)
+
+To modify any setting, simply open `settings.h` and change the desired values. The changes will take effect the next time you compile and upload the code.
 
 ## Troubleshooting
 
