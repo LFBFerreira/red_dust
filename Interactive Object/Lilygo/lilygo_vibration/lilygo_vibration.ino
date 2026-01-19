@@ -20,7 +20,7 @@ TraceWidget tr = TraceWidget(&gr);     // Graph trace tr with pointer to gr
 const float gxLow  = 0.0;
 const float gxHigh = 200.0;            // X-axis: number of data points
 const float gyLow  = 0.0;              // Y-axis: minimum value (0)
-const float gyHigh = 1.0;              // Y-axis: maximum value (1.0 for normalized values)
+const float gyHigh = 10.0;             // Y-axis: maximum value (10.0, scaled from 1.0 for better grid resolution)
 
 // Graph state
 float graphX = 0.0;                     // Current X position on graph
@@ -112,8 +112,9 @@ void handleValue(float value, String timestamp, const char* source) {
   
   // Add point to graph if initialized
   // Ensure value is constrained to 0..1 before adding to graph
+  // Scale value by 10 for graph display (0-1 becomes 0-10) but keep original for PWM
   if (graphInitialized) {
-    float graphValue = constrain(value, 0.0, 1.0);
+    float graphValue = constrain(value, 0.0, 1.0) * 10.0;  // Scale by 10 for graph
     tr.addPoint(graphX, graphValue);
     graphX += 1.0;
     
@@ -468,29 +469,7 @@ void setup() {
   Serial.println("Supports: Serial (value,timestamp format) and OSC");
   Serial.println("==========================================");
   
-  // Initialize WiFi Manager
-  WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
-  
-  // Configure WiFiManager for non-blocking operation
-  wm.setConfigPortalBlocking(false);
-  wm.setConfigPortalTimeout(60);
-  
-  // Automatically connect using saved credentials if they exist
-  // If connection fails it starts an access point with the specified name
-  if(wm.autoConnect("AutoConnectAP")){
-    Serial.println("WiFi connected...yeey :)");
-    wifiConnected = true;
-    
-    // Initialize UDP for OSC
-    udp.begin(OSC_PORT);
-    Serial.printf("OSC listening on UDP port %d, path: %s\n", OSC_PORT, OSC_PATH);
-  }
-  else {
-    Serial.println("WiFi Configportal running");
-    wifiConnected = false;
-  }
-  
-  // Initialize TFT display
+  // Initialize TFT display FIRST (before WiFi to show graph immediately)
   tft.init();
   tft.setRotation(3);  // Landscape orientation
   tft.fillScreen(TFT_BLACK);
@@ -503,13 +482,14 @@ void setup() {
   // Reduced height to make room for status text at top
   gr.createGraph(220, 110, tft.color565(5, 5, 5));
   
-  // X scale units is from 0 to 200 (data points), y scale units is 0 to 1 (normalized values)
+  // X scale units is from 0 to 200 (data points), y scale units is 0 to 10 (scaled from 0-1 for better grid resolution)
   gr.setGraphScale(gxLow, gxHigh, gyLow, gyHigh);
   
-  // X grid starts at 0 with lines every 20 x-scale units
-  // Y grid starts at 0 with lines every 0.1 y-scale units
+  // X grid disabled (spacing larger than range to prevent vertical lines)
+  // Y grid starts at 0 with lines every 2 y-scale units (horizontal lines at 0, 2, 4, 6, 8, 10)
+  // This corresponds to original values of 0, 0.2, 0.4, 0.6, 0.8, 1.0
   // blue grid
-  gr.setGraphGrid(gxLow, 20.0, gyLow, 0.1, TFT_BLUE);
+  gr.setGraphGrid(gxLow, 1000, gyLow, 2, TFT_BLUE);
   
   // Draw empty graph, top left corner at pixel coordinate 10,25 on TFT
   // Positioned below status text area (top 20 pixels)
@@ -526,9 +506,41 @@ void setup() {
   lastSerialConnected = false;
   lastSerialReceiving = false;
   lastDisplayedValue = -1.0;
-  lastWifiConnected = wifiConnected;  // Initialize WiFi status tracking
+  lastWifiConnected = false;  // Initialize WiFi status tracking (not connected yet)
   lastWifiStatusText = "";  // Initialize WiFi status text tracking
+  wifiConnected = false;  // Initialize WiFi state
   updateStatusText();  // Draw initial status
+  
+  Serial.println("TFT display and graph initialized");
+  
+  // Initialize WiFi Manager (non-blocking, after display is ready)
+  WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
+  
+  // Configure WiFiManager for non-blocking operation
+  wm.setConfigPortalBlocking(false);
+  wm.setConfigPortalTimeout(60);
+  
+  // Set short connection timeout to minimize blocking in autoConnect()
+  // Connection will continue in background via wm.process() in loop()
+  wm.setConnectTimeout(5);  // Short timeout (5 seconds) to return quickly
+  wm.setSaveConnectTimeout(10);  // Save credentials timeout
+  
+  // Try to auto-connect (with setConfigPortalBlocking(false), this should return quickly)
+  // Connection attempt continues in background via wm.process() in loop()
+  // Note: autoConnect() may still block briefly, but graph is already drawn above
+  bool wifiStarted = wm.autoConnect("AutoConnectAP");
+  
+  if (wifiStarted) {
+    // Connected immediately (rare, but possible if credentials are cached)
+    Serial.println("WiFi connected immediately");
+    wifiConnected = true;
+    udp.begin(OSC_PORT);
+    Serial.printf("OSC listening on UDP port %d, path: %s\n", OSC_PORT, OSC_PATH);
+  } else {
+    // Connection attempt started, will complete in loop() via wm.process()
+    Serial.println("WiFi connection attempt started (non-blocking)");
+    wifiConnected = false;
+  }
   
   // Reserve buffer space
   serialBuffer.reserve(SERIAL_BUFFER_SIZE);
@@ -546,7 +558,6 @@ void setup() {
   ledcWrite(VIBRATION_MOTOR_PIN, 0);
   
   Serial.println("Vibration motor initialized on GPIO 25");
-  Serial.println("TFT display and graph initialized");
 }
 
 void loop() {
