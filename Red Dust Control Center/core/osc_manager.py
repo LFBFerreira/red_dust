@@ -9,13 +9,9 @@ import logging
 from core.interactive_object import InteractiveObject
 from core.osc_object import OSCObject
 from core.serial_object import SerialObject
-from settings import SERIAL_BAUDRATE
+from settings import SERIAL_BAUDRATE, OSC_OUTPUT_RATE, OSC_OUTPUT_INTERVAL_MS, SERIAL_OUTPUT_RATE, SERIAL_OUTPUT_INTERVAL_MS
 
 logger = logging.getLogger(__name__)
-
-# Fixed output rate: 60 Hz
-OUTPUT_RATE = 60
-OUTPUT_INTERVAL_MS = 1000 // OUTPUT_RATE  # ~16.67 ms
 
 # Backward compatibility: export OSCObject from here
 __all__ = ['OSCManager', 'OSCObject', 'SerialObject']
@@ -50,10 +46,14 @@ class OSCManager(QObject):
         self._objects: Dict[str, InteractiveObject] = {}
         self._streaming = False
         
-        # Timer for 60 Hz output (always running when objects are streaming)
-        self._timer = QTimer()
-        self._timer.timeout.connect(self._send_frame)
-        self._timer.setInterval(OUTPUT_INTERVAL_MS)
+        # Separate timers for OSC and Serial objects
+        self._osc_timer = QTimer()
+        self._osc_timer.timeout.connect(self._send_osc_frame)
+        self._osc_timer.setInterval(OSC_OUTPUT_INTERVAL_MS)
+        
+        self._serial_timer = QTimer()
+        self._serial_timer.timeout.connect(self._send_serial_frame)
+        self._serial_timer.setInterval(SERIAL_OUTPUT_INTERVAL_MS)
     
     def set_waveform_model(self, waveform_model) -> None:
         """
@@ -95,9 +95,9 @@ class OSCManager(QObject):
         obj = OSCObject(name, address, host, port, remap_min, remap_max)
         self._objects[name] = obj
         
-        # Start timer if not already running (needed for per-object streaming)
-        if not self._timer.isActive():
-            self._timer.start()
+        # Start OSC timer if not already running (needed for per-object streaming)
+        if not self._osc_timer.isActive():
+            self._osc_timer.start()
         
         logger.info(f"Added OSC object: {name}")
         return obj
@@ -129,9 +129,9 @@ class OSCManager(QObject):
         # Emit connection state signal
         self.object_connection_state_changed.emit(name, obj.is_connected())
         
-        # Start timer if not already running (needed for per-object streaming)
-        if not self._timer.isActive():
-            self._timer.start()
+        # Start Serial timer if not already running (needed for per-object streaming)
+        if not self._serial_timer.isActive():
+            self._serial_timer.start()
         
         logger.info(f"Added Serial object: {name}")
         return obj
@@ -241,9 +241,13 @@ class OSCManager(QObject):
                 self.object_streaming_state_changed.emit(name, True)
                 logger.info(f"Started streaming for object: {name}")
                 
-                # Ensure timer is running
-                if not self._timer.isActive():
-                    self._timer.start()
+                # Ensure appropriate timer is running
+                if isinstance(obj, SerialObject):
+                    if not self._serial_timer.isActive():
+                        self._serial_timer.start()
+                else:  # OSC object
+                    if not self._osc_timer.isActive():
+                        self._osc_timer.start()
     
     def stop_object_streaming(self, name: str) -> None:
         """
@@ -274,9 +278,13 @@ class OSCManager(QObject):
                 if remapped_zero is not None:
                     self.object_value_updated.emit(name, normalized_zero)
                 
-                # Stop timer if no objects are streaming
-                if not any(obj.streaming_enabled for obj in self._objects.values()):
-                    self._timer.stop()
+                # Stop timers if no objects of that type are streaming
+                if isinstance(obj, SerialObject):
+                    if not any(o.streaming_enabled for o in self._objects.values() if isinstance(o, SerialObject)):
+                        self._serial_timer.stop()
+                else:  # OSC object
+                    if not any(o.streaming_enabled for o in self._objects.values() if isinstance(o, OSCObject)):
+                        self._osc_timer.stop()
     
     def is_object_streaming(self, name: str) -> bool:
         """
@@ -307,14 +315,18 @@ class OSCManager(QObject):
             self.stop_object_streaming(name)
     
     def start_streaming(self) -> None:
-        """Start OSC streaming at 60 Hz (global streaming - kept for backward compatibility)."""
+        """Start streaming (global streaming - kept for backward compatibility)."""
         if self._streaming:
             return
         
         self._streaming = True
-        # Timer is managed per-object now, but we ensure it's running
-        if not self._timer.isActive():
-            self._timer.start()
+        # Timers are managed per-object now, but we ensure they're running if needed
+        has_osc_objects = any(isinstance(obj, OSCObject) and obj.streaming_enabled for obj in self._objects.values())
+        has_serial_objects = any(isinstance(obj, SerialObject) and obj.streaming_enabled for obj in self._objects.values())
+        if has_osc_objects and not self._osc_timer.isActive():
+            self._osc_timer.start()
+        if has_serial_objects and not self._serial_timer.isActive():
+            self._serial_timer.start()
         self.streaming_state_changed.emit(True)
         logger.info("OSC streaming started (global)")
     
@@ -344,8 +356,8 @@ class OSCManager(QObject):
         """Check if streaming is active (global state)."""
         return self._streaming
     
-    def _send_frame(self) -> None:
-        """Send one frame of data to all streaming objects (called by timer at 60 Hz)."""
+    def _send_osc_frame(self) -> None:
+        """Send one frame of data to all streaming OSC objects (called by OSC timer)."""
         if self._waveform_model is None or self._playback_controller is None:
             return
         
@@ -357,9 +369,30 @@ class OSCManager(QObject):
         # Get normalized value from waveform model
         normalized_value = self._waveform_model.get_normalized_value(current_time)
         
-        # Send to all objects that have streaming enabled
+        # Send to all OSC objects that have streaming enabled
         for obj in self._objects.values():
-            if obj.streaming_enabled:
+            if isinstance(obj, OSCObject) and obj.streaming_enabled:
+                remapped_value = obj.send(normalized_value, current_time)
+                # Emit signal for UI updates (emit normalized value so card can remap using its own settings)
+                if remapped_value is not None:
+                    self.object_value_updated.emit(obj.name, normalized_value)
+    
+    def _send_serial_frame(self) -> None:
+        """Send one frame of data to all streaming Serial objects (called by Serial timer)."""
+        if self._waveform_model is None or self._playback_controller is None:
+            return
+        
+        # Get current timestamp from playback controller
+        current_time = self._playback_controller.get_current_timestamp()
+        if current_time is None:
+            return
+        
+        # Get normalized value from waveform model
+        normalized_value = self._waveform_model.get_normalized_value(current_time)
+        
+        # Send to all Serial objects that have streaming enabled
+        for obj in self._objects.values():
+            if isinstance(obj, SerialObject) and obj.streaming_enabled:
                 remapped_value = obj.send(normalized_value, current_time)
                 # Emit signal for UI updates (emit normalized value so card can remap using its own settings)
                 if remapped_value is not None:

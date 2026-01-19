@@ -28,9 +28,13 @@ OBJECT_CARD_WIDTH = 250  # Fixed width for individual object cards (in pixels)
 
 # OSC Streaming settings
 STREAMING_PORT = 8000  # Default UDP port for OSC streaming (can be overridden per object)
+OSC_OUTPUT_RATE = 60  # Transmission rate for OSC connections (Hz)
+OSC_OUTPUT_INTERVAL_MS = 1000 // OSC_OUTPUT_RATE  # ~16.67 ms
 
 # Serial Communication settings
 SERIAL_BAUDRATE = 115200  # Default baudrate for Serial communication (can be overridden per object)
+SERIAL_OUTPUT_RATE = 60  # Transmission rate for Serial connections (Hz) - separate from baudrate
+SERIAL_OUTPUT_INTERVAL_MS = 1000 // SERIAL_OUTPUT_RATE  # ~16.67 ms
 
 # Waveform Viewer settings
 WAVEFORM_INACTIVE_CHANNEL_MAX_POINTS = 10000  # Maximum number of data points for inactive channels (active channel uses full resolution)
