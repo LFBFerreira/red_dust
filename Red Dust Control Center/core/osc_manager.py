@@ -102,7 +102,16 @@ class OSCManager(QObject):
         logger.info(f"Added OSC object: {name}")
         return obj
     
-    def add_serial_object(self, name: str, port: str, baudrate: int = None, remap_min: float = 0.0, remap_max: float = 1.0) -> SerialObject:
+    def add_serial_object(
+        self,
+        name: str,
+        port: str,
+        baudrate: int = None,
+        remap_min: float = 0.0,
+        remap_max: float = 1.0,
+        input_channels: Optional[list[str]] = None,
+        norm_threshold: float = 0.0
+    ) -> SerialObject:
         """
         Add a new Serial object.
         
@@ -123,7 +132,15 @@ class OSCManager(QObject):
         if baudrate is None:
             baudrate = SERIAL_BAUDRATE
         
-        obj = SerialObject(name, port, baudrate, remap_min, remap_max)
+        obj = SerialObject(
+            name,
+            port,
+            baudrate,
+            remap_min,
+            remap_max,
+            input_channels=input_channels,
+            norm_threshold=norm_threshold
+        )
         self._objects[name] = obj
         
         # Emit connection state signal
@@ -387,14 +404,19 @@ class OSCManager(QObject):
         if current_time is None:
             return
         
-        # Get normalized value from waveform model
-        normalized_value = self._waveform_model.get_normalized_value(current_time)
-        
         # Send to all Serial objects that have streaming enabled
         for obj in self._objects.values():
             if isinstance(obj, SerialObject) and obj.streaming_enabled:
-                remapped_value = obj.send(normalized_value, current_time)
+                channel_values = []
+                for source_channel in obj.input_channels:
+                    if source_channel == "Active Channel":
+                        value = self._waveform_model.get_normalized_value(current_time)
+                    else:
+                        value = self._waveform_model.get_normalized_value_for_channel(current_time, source_channel)
+                    channel_values.append(value)
+
+                remapped_value = obj.send_channel_values(channel_values, current_time)
                 # Emit signal for UI updates (emit normalized value so card can remap using its own settings)
                 if remapped_value is not None:
-                    self.object_value_updated.emit(obj.name, normalized_value)
+                    self.object_value_updated.emit(obj.name, channel_values[0] if channel_values else 0.0)
 

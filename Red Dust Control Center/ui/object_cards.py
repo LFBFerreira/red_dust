@@ -4,7 +4,7 @@ Object Cards widget for managing interactive objects (OSC and Serial).
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QDoubleSpinBox, QPushButton, 
                                QScrollArea, QFrame, QProgressBar, QSpinBox,
-                               QComboBox)
+                               QComboBox, QSlider)
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QPalette
 import logging
@@ -36,6 +36,7 @@ class ObjectCard(QFrame):
         self._communication_type = communication_type
         self._streaming = False
         self._active_channel = None
+        self._available_input_channels = []
         self._channel_colors = {}  # Cache of channel to color mapping
         self._refreshing_ports = False  # Guard flag to prevent recursive refresh
         self._setup_ui()
@@ -117,6 +118,44 @@ class ObjectCard(QFrame):
             
             port_layout.addLayout(port_control_layout)
             layout.addLayout(port_layout)
+
+            # Serial input channel routing
+            channel_routing_layout = QVBoxLayout()
+            channel_routing_layout.addWidget(QLabel("Input Channel Routing:"))
+
+            input1_layout = QHBoxLayout()
+            input1_layout.addWidget(QLabel("Input 1 (Pin 9):"))
+            self.input1_channel_combo = QComboBox()
+            self.input1_channel_combo.addItem("Active Channel")
+            self.input1_channel_combo.currentTextChanged.connect(lambda: self.config_changed.emit(self._name))
+            input1_layout.addWidget(self.input1_channel_combo)
+            channel_routing_layout.addLayout(input1_layout)
+
+            input2_layout = QHBoxLayout()
+            input2_layout.addWidget(QLabel("Input 2 (Pin 10):"))
+            self.input2_channel_combo = QComboBox()
+            self.input2_channel_combo.addItem("Active Channel")
+            self.input2_channel_combo.currentTextChanged.connect(lambda: self.config_changed.emit(self._name))
+            input2_layout.addWidget(self.input2_channel_combo)
+            channel_routing_layout.addLayout(input2_layout)
+
+            layout.addLayout(channel_routing_layout)
+
+            # Activation threshold (normalized value)
+            threshold_layout = QVBoxLayout()
+            threshold_label_layout = QHBoxLayout()
+            threshold_label_layout.addWidget(QLabel("Norm Threshold:"))
+            self.threshold_value_label = QLabel("0.00")
+            threshold_label_layout.addStretch()
+            threshold_label_layout.addWidget(self.threshold_value_label)
+            threshold_layout.addLayout(threshold_label_layout)
+
+            self.norm_threshold_slider = QSlider(Qt.Orientation.Horizontal)
+            self.norm_threshold_slider.setRange(0, 100)
+            self.norm_threshold_slider.setValue(0)
+            self.norm_threshold_slider.valueChanged.connect(self._on_threshold_slider_changed)
+            threshold_layout.addWidget(self.norm_threshold_slider)
+            layout.addLayout(threshold_layout)
         
         # Remap Min and Max side by side
         remap_layout = QHBoxLayout()
@@ -388,6 +427,12 @@ class ObjectCard(QFrame):
         self.start_button.setEnabled(True)   # Enable start when stopped
         self.stop_button.setEnabled(False)   # Disable stop when stopped
         self.streaming_stopped.emit(self._name)
+
+    def _on_threshold_slider_changed(self, slider_value: int) -> None:
+        """Handle normalized threshold slider change."""
+        threshold = slider_value / 100.0
+        self.threshold_value_label.setText(f"{threshold:.2f}")
+        self.config_changed.emit(self._name)
     
     def set_streaming_state(self, streaming: bool) -> None:
         """
@@ -576,6 +621,16 @@ class ObjectCard(QFrame):
         else:  # Serial
             config['port'] = self.port_combo.currentText()
             config['baudrate'] = SERIAL_BAUDRATE  # Use default from settings
+            input_channels = ["Active Channel", "Active Channel"]
+            if hasattr(self, 'input1_channel_combo'):
+                input_channels[0] = self.input1_channel_combo.currentText() or "Active Channel"
+            if hasattr(self, 'input2_channel_combo'):
+                input_channels[1] = self.input2_channel_combo.currentText() or "Active Channel"
+            config['input_channels'] = input_channels
+            if hasattr(self, 'norm_threshold_slider'):
+                config['norm_threshold'] = self.norm_threshold_slider.value() / 100.0
+            else:
+                config['norm_threshold'] = 0.0
         
         return config
     
@@ -599,6 +654,19 @@ class ObjectCard(QFrame):
         else:  # Serial
             if 'port' in config:
                 self._set_serial_port(config['port'])
+            if 'input_channels' in config and isinstance(config['input_channels'], list):
+                input_channels = config['input_channels']
+                if len(input_channels) >= 1 and hasattr(self, 'input1_channel_combo'):
+                    self._set_channel_combo_value(self.input1_channel_combo, input_channels[0])
+                if len(input_channels) >= 2 and hasattr(self, 'input2_channel_combo'):
+                    self._set_channel_combo_value(self.input2_channel_combo, input_channels[1])
+            if 'norm_threshold' in config and hasattr(self, 'norm_threshold_slider'):
+                threshold = config.get('norm_threshold', 0.0)
+                threshold = max(0.0, min(1.0, float(threshold)))
+                self.norm_threshold_slider.blockSignals(True)
+                self.norm_threshold_slider.setValue(int(round(threshold * 100)))
+                self.norm_threshold_slider.blockSignals(False)
+                self.threshold_value_label.setText(f"{threshold:.2f}")
             # Baudrate is always SERIAL_BAUDRATE from settings, no need to set it
         
         if 'remap_min' in config:
@@ -619,6 +687,37 @@ class ObjectCard(QFrame):
         elif 'enabled' in config:
             # Backward compatibility: convert old enabled to streaming_enabled
             self.set_streaming_state(config['enabled'])
+
+    def set_available_input_channels(self, channels: list[str]) -> None:
+        """
+        Update selectable waveform channels for Serial input routing.
+
+        Args:
+            channels: Available waveform channel identifiers
+        """
+        if self._communication_type != "Serial":
+            return
+
+        self._available_input_channels = channels.copy() if channels else []
+        options = ["Active Channel"] + self._available_input_channels
+
+        for combo in [self.input1_channel_combo, self.input2_channel_combo]:
+            current = combo.currentText() or "Active Channel"
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(options)
+            self._set_channel_combo_value(combo, current)
+            combo.blockSignals(False)
+
+    def _set_channel_combo_value(self, combo: QComboBox, value: str) -> None:
+        """Set combo value, adding custom option when needed."""
+        target = value or "Active Channel"
+        idx = combo.findText(target)
+        if idx < 0:
+            combo.addItem(target)
+            idx = combo.findText(target)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
 
 
 class ObjectCardsContainer(QWidget):
