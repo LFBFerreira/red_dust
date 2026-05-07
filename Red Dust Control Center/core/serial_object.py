@@ -81,7 +81,14 @@ class SerialObject(InteractiveObject):
         
         # Try to create new connection
         try:
-            self._serial = serial.Serial(self.port, self.baudrate, timeout=1)
+            # Critical: keep UI responsive. Serial writes happen on the Qt main thread
+            # (driven by a QTimer), so we must avoid blocking I/O here.
+            self._serial = serial.Serial(
+                self.port,
+                self.baudrate,
+                timeout=0,
+                write_timeout=0
+            )
             logger.info(f"Opened Serial connection for {self.name} on {self.port} at {self.baudrate} baud")
             self._port_opened = True
             return True
@@ -184,6 +191,9 @@ class SerialObject(InteractiveObject):
             message = f"{remapped[0]:.6f},{remapped[1]:.6f},{timestamp_str}\n"
             self._serial.write(message.encode('utf-8'))
             return remapped[0]
+        except serial.SerialTimeoutException:
+            # Non-blocking write: if OS buffer is full / device stalled, drop this frame.
+            return None
         except Exception as e:
             logger.error(f"Failed to send Serial message for {self.name}: {e}")
             return None

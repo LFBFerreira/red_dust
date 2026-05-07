@@ -494,9 +494,9 @@ class ObjectCard(QFrame):
             channel: Active channel identifier (e.g., "03.BHU")
         """
         self._active_channel = channel
-        # Update progress bar color immediately if we have a color for this channel
-        if channel in self._channel_colors:
-            self._update_progress_bar_color()
+        # Updating the stylesheet is relatively expensive; do it only when the
+        # active channel changes (not on every streamed value update).
+        self._update_progress_bar_color()
     
     def _get_channel_color(self, channel: str) -> str:
         """
@@ -591,9 +591,7 @@ class ObjectCard(QFrame):
         
         # Update progress bar format to show actual remapped value
         self.value_progress.setFormat(f"{remapped_value:.3f}")
-        
-        # Update color based on active channel (not percentage)
-        self._update_progress_bar_color()
+        # Color is updated when active channel changes (see set_active_channel()).
     
     def get_name(self) -> str:
         """Get object name."""

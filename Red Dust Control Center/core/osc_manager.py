@@ -5,6 +5,7 @@ from typing import Dict, Optional, Union
 from obspy import UTCDateTime
 from PySide6.QtCore import QObject, QTimer, Signal
 import logging
+import time
 
 from core.interactive_object import InteractiveObject
 from core.osc_object import OSCObject
@@ -45,6 +46,9 @@ class OSCManager(QObject):
         self._playback_controller = playback_controller
         self._objects: Dict[str, InteractiveObject] = {}
         self._streaming = False
+        # Throttle UI updates (progress bars, etc.) to avoid repaint overload.
+        self._ui_emit_min_interval_s = 0.10  # ~10 Hz
+        self._last_ui_emit_s: Dict[str, float] = {}
         
         # Separate timers for OSC and Serial objects
         self._osc_timer = QTimer()
@@ -392,7 +396,11 @@ class OSCManager(QObject):
                 remapped_value = obj.send(normalized_value, current_time)
                 # Emit signal for UI updates (emit normalized value so card can remap using its own settings)
                 if remapped_value is not None:
-                    self.object_value_updated.emit(obj.name, normalized_value)
+                    now = time.monotonic()
+                    last = self._last_ui_emit_s.get(obj.name, 0.0)
+                    if (now - last) >= self._ui_emit_min_interval_s:
+                        self._last_ui_emit_s[obj.name] = now
+                        self.object_value_updated.emit(obj.name, normalized_value)
     
     def _send_serial_frame(self) -> None:
         """Send one frame of data to all streaming Serial objects (called by Serial timer)."""
@@ -418,5 +426,9 @@ class OSCManager(QObject):
                 remapped_value = obj.send_channel_values(channel_values, current_time)
                 # Emit signal for UI updates (emit normalized value so card can remap using its own settings)
                 if remapped_value is not None:
-                    self.object_value_updated.emit(obj.name, channel_values[0] if channel_values else 0.0)
+                    now = time.monotonic()
+                    last = self._last_ui_emit_s.get(obj.name, 0.0)
+                    if (now - last) >= self._ui_emit_min_interval_s:
+                        self._last_ui_emit_s[obj.name] = now
+                        self.object_value_updated.emit(obj.name, channel_values[0] if channel_values else 0.0)
 

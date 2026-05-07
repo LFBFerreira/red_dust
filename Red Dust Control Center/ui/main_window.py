@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from pathlib import Path
 from obspy import UTCDateTime
 import logging
+import time
 
 from core.data_manager import DataManager
 from core.waveform_model import WaveformModel
@@ -105,6 +106,12 @@ class MainWindow(QMainWindow):
         
         # Data loading thread
         self.load_thread = None
+
+        # Throttle high-frequency UI updates to keep the event loop responsive.
+        self._last_playhead_ui_s = 0.0
+        self._last_value_ui_s = 0.0
+        self._playhead_ui_min_interval_s = 1.0 / 30.0  # ~30 Hz for playhead
+        self._value_ui_min_interval_s = 0.10           # ~10 Hz for slider/value labels
         
         # Setup UI
         self._setup_menu_bar()
@@ -512,19 +519,24 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
     
     def _on_playhead_updated(self, timestamp):
         """Handle playhead position update."""
-        self.waveform_viewer.update_playhead(timestamp)
+        now = time.monotonic()
+
+        # Update playhead visualization at a lower rate than the core timer.
+        if (now - self._last_playhead_ui_s) >= self._playhead_ui_min_interval_s:
+            self._last_playhead_ui_s = now
+            self.waveform_viewer.update_playhead(timestamp)
         
         # Update time display
-        time_range = self.waveform_model.get_time_range()
-        if time_range:
-            self.playback_controls.update_time_display(timestamp, time_range[1])
-            # Update position slider
-            self.playback_controls.update_position_slider(timestamp, time_range[0], time_range[1])
-        
-        # Update value display (raw and normalized)
-        raw_value = self.waveform_model.get_raw_value(timestamp)
-        normalized_value = self.waveform_model.get_normalized_value(timestamp)
-        self.playback_controls.update_value_display(raw_value, normalized_value)
+        if (now - self._last_value_ui_s) >= self._value_ui_min_interval_s:
+            self._last_value_ui_s = now
+            time_range = self.waveform_model.get_time_range()
+            if time_range:
+                self.playback_controls.update_time_display(timestamp, time_range[1])
+                self.playback_controls.update_position_slider(timestamp, time_range[0], time_range[1])
+
+            raw_value = self.waveform_model.get_raw_value(timestamp)
+            normalized_value = self.waveform_model.get_normalized_value(timestamp)
+            self.playback_controls.update_value_display(raw_value, normalized_value)
     
     def _on_position_slider_changed(self, value: int) -> None:
         """Handle position slider change."""
