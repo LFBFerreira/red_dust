@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from obspy import Stream, UTCDateTime
 
+from settings import MAX_SELECTED_CHANNELS
+
 logger = logging.getLogger(__name__)
 
 _LOG_TAG = "[multi_ch]"
@@ -85,6 +87,14 @@ class WaveformModel:
             if ch in valid and ch not in seen:
                 seen.add(ch)
                 filtered.append(ch)
+        if len(filtered) > MAX_SELECTED_CHANNELS:
+            logger.info(
+                "%s selection truncated from %s to %s channels",
+                _LOG_TAG,
+                len(filtered),
+                MAX_SELECTED_CHANNELS,
+            )
+            filtered = filtered[:MAX_SELECTED_CHANNELS]
         self._selected_channels = filtered
         self._recalculate_normalization()
         tr = self.get_time_range()

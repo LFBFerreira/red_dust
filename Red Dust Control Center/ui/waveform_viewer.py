@@ -13,6 +13,8 @@ from pyqtgraph import AxisItem
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from ui.channel_colors import FALLBACK_TRACE_COLOR, channel_color_map
+
 logger = logging.getLogger(__name__)
 
 _LOG_TAG = "[multi_ch]"
@@ -210,23 +212,8 @@ class WaveformViewer(QWidget):
 
         self.plot_widget.setLabel("left", "Amplitude (Counts)")
 
-        channel_colors = [
-            "#00d4ff",
-            "#ff7f0e",
-            "#2ca02c",
-            "#d62728",
-            "#9467bd",
-            "#8c564b",
-            "#e377c2",
-            "#7f7f7f",
-            "#bcbd22",
-            "#17becf",
-        ]
         sorted_ids = sorted(self._channel_data_cache.keys())
-        channel_color_map = {
-            cid: channel_colors[i % len(channel_colors)]
-            for i, cid in enumerate(sorted_ids)
-        }
+        colors_by_channel = channel_color_map(sorted_ids)
 
         visible_list = [cid for cid in visible_set if cid in self._channel_data_cache]
         total_points = 0
@@ -238,7 +225,7 @@ class WaveformViewer(QWidget):
             data = channel_data["data_full"]
             npts = channel_data["npts_original"]
             total_points += npts
-            color = channel_color_map.get(channel_id, "#666666")
+            color = colors_by_channel.get(channel_id, FALLBACK_TRACE_COLOR)
             plot_item = self.plot_widget.plot(
                 times, data, pen=pg.mkPen(color=color, width=CHANNEL_LINE_WIDTH)
             )

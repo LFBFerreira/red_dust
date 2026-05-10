@@ -6,6 +6,27 @@ import math
 from typing import List, Optional, Tuple
 
 from obspy import UTCDateTime
+from PySide6.QtCore import Signal, Qt
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDoubleSpinBox,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+    QWidgetAction,
+)
+
+from settings import MAX_SELECTED_CHANNELS
+from ui.channel_colors import FALLBACK_TRACE_COLOR, channel_color_map
+
+logger = logging.getLogger(__name__)
 
 
 def _elapsed_total_seconds_for_playback(
@@ -24,22 +45,6 @@ def _elapsed_total_seconds_for_playback(
     if elapsed_s > total_s:
         elapsed_s = total_s
     return (elapsed_s, total_s)
-from PySide6.QtCore import Signal, Qt
-from PySide6.QtWidgets import (
-    QCheckBox,
-    QDoubleSpinBox,
-    QHBoxLayout,
-    QLabel,
-    QMenu,
-    QPushButton,
-    QSlider,
-    QToolButton,
-    QVBoxLayout,
-    QWidget,
-    QWidgetAction,
-)
-
-logger = logging.getLogger(__name__)
 
 _LOG_TAG = "[multi_ch]"
 
@@ -79,13 +84,29 @@ class PlaybackControls(QWidget):
         )
         self.channels_menu = QMenu(self.channels_button)
         self.channels_button.setMenu(self.channels_menu)
+        self.channels_button.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
         channel_layout.addWidget(self.channels_button)
+        self.clear_channels_button = QPushButton("X")
+        self.clear_channels_button.setToolTip("Unselect all channels")
+        self.clear_channels_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        _fm = self.clear_channels_button.fontMetrics()
+        _x_w = _fm.horizontalAdvance("X") + 10
+        self.clear_channels_button.setFixedWidth(_x_w)
+        self.clear_channels_button.setStyleSheet("QPushButton { padding: 1px 4px; }")
+        self.clear_channels_button.clicked.connect(self._on_clear_all_channels)
+        channel_layout.addWidget(self.clear_channels_button)
         channel_layout.addStretch()
-        row1.addLayout(channel_layout, 1)
+        # Stretch 0: channel strip keeps natural width; value/time labels absorb resize.
+        row1.addLayout(channel_layout, 0)
 
         row1.addStretch()
         self.value_label = QLabel("--")
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.value_label.setTextFormat(Qt.TextFormat.PlainText)
         row1.addWidget(self.value_label, 1)
 
         row1.addStretch()
@@ -207,13 +228,20 @@ class PlaybackControls(QWidget):
         entries: Optional[List[Tuple[str, Optional[float], Optional[float]]]] = None,
     ) -> None:
         if not entries:
+            self.value_label.setTextFormat(Qt.TextFormat.PlainText)
             self.value_label.setText("--")
             return
+        cmap = channel_color_map(sorted(self._channel_ids))
         parts: List[str] = []
-        for _, raw_value, normalized_value in entries:
+        for ch, raw_value, normalized_value in entries:
+            color = cmap.get(ch, FALLBACK_TRACE_COLOR)
             raw_str = self._format_raw_for_label(raw_value)
             norm_str = self._format_norm_for_label(normalized_value)
-            parts.append(f"{raw_str} ({norm_str})")
+            parts.append(
+                f'<span style="color:{color}">{raw_str}</span> '
+                f'(<span style="color:{color}">{norm_str}</span>)'
+            )
+        self.value_label.setTextFormat(Qt.TextFormat.RichText)
         self.value_label.setText(", ".join(parts))
 
     def update_loop_display(
@@ -282,20 +310,60 @@ class PlaybackControls(QWidget):
         self._pending_slider_value = None
         return timestamp
 
+    def _on_clear_all_channels(self) -> None:
+        for cb in self._channel_checks.values():
+            cb.blockSignals(True)
+            cb.setChecked(False)
+            cb.blockSignals(False)
+        self._sync_channel_checkbox_colors([])
+        self._update_channels_button_text([])
+        logger.debug("%s clear all channels", _LOG_TAG)
+        self.channels_selection_changed.emit([])
+
     def _emit_selection_from_menu(self) -> None:
+        sender = self.sender()
         selected = [ch for ch in self._channel_ids if self._channel_checks[ch].isChecked()]
+        if len(selected) > MAX_SELECTED_CHANNELS:
+            if isinstance(sender, QCheckBox) and sender.isChecked():
+                sender.blockSignals(True)
+                sender.setChecked(False)
+                sender.blockSignals(False)
+                QMessageBox.information(
+                    self,
+                    "Channels",
+                    f"At most {MAX_SELECTED_CHANNELS} channels can be selected.",
+                )
+            selected = [ch for ch in self._channel_ids if self._channel_checks[ch].isChecked()]
+        self._sync_channel_checkbox_colors(selected)
         self._update_channels_button_text(selected)
         logger.debug("%s channels_selection_changed count=%s", _LOG_TAG, len(selected))
         self.channels_selection_changed.emit(selected)
 
+    def _sync_channel_checkbox_colors(self, selected: List[str]) -> None:
+        """Color label text only for checked channels; others use the default palette."""
+        sel_set = set(selected)
+        cmap = channel_color_map(sorted(self._channel_ids))
+        for ch, cb in self._channel_checks.items():
+            if ch in sel_set:
+                color = cmap.get(ch, FALLBACK_TRACE_COLOR)
+                cb.setStyleSheet(f"QCheckBox {{ color: {color}; }}")
+            else:
+                cb.setStyleSheet("")
+
     def _update_channels_button_text(self, selected: List[str]) -> None:
+        cmap = channel_color_map(sorted(self._channel_ids))
         n = len(selected)
         if n == 0:
-            self.channels_button.setText(" - ")
-        elif n == 1:
-            self.channels_button.setText(f"{selected[0]}")
+            self.channels_button.setText("Select a channel")
+            self.channels_button.setStyleSheet("")
         else:
-            self.channels_button.setText(f"{selected[0]} +{n - 1}")
+            first = selected[0]
+            color = cmap.get(first, FALLBACK_TRACE_COLOR)
+            self.channels_button.setStyleSheet(f"QToolButton {{ color: {color}; }}")
+            if n == 1:
+                self.channels_button.setText(first)
+            else:
+                self.channels_button.setText(f"{first} +{n - 1}")
 
     def set_channels(self, channels: list[str]) -> None:
         self.channels_menu.clear()
@@ -309,6 +377,7 @@ class PlaybackControls(QWidget):
             self._channel_checks[ch] = cb
             cb.toggled.connect(self._emit_selection_from_menu)
         logger.debug("%s channel menu rebuilt n=%s", _LOG_TAG, len(channels))
+        self._sync_channel_checkbox_colors([])
         self._update_channels_button_text([])
 
     def set_selected_channels(self, selected: list[str]) -> None:
@@ -318,6 +387,7 @@ class PlaybackControls(QWidget):
             cb.setChecked(ch in sel_set)
             cb.blockSignals(False)
         ordered = [ch for ch in self._channel_ids if ch in sel_set]
+        self._sync_channel_checkbox_colors(ordered)
         self._update_channels_button_text(ordered)
         logger.debug(
             "%s set_selected_channels sync n=%s (blocked emit)", _LOG_TAG, len(ordered)

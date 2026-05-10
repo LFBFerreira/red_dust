@@ -589,10 +589,13 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
             len(selected),
         )
         self.waveform_model.set_selected_channels(selected)
+        synced = self.waveform_model.get_selected_channels()
+        if len(synced) != len(selected):
+            self.playback_controls.set_selected_channels(synced)
         stream = self.waveform_model.get_stream()
         if stream:
-            self.waveform_viewer.update_waveform(stream, selected)
-        if not selected:
+            self.waveform_viewer.update_waveform(stream, synced)
+        if not synced:
             self.playback_controller.stop()
         self._update_metadata()
         self._update_object_card_channels()

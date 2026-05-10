@@ -16,6 +16,9 @@ DEFAULT_NETWORK = "XB"
 # Available stations from InSight SEIS
 AVAILABLE_STATIONS = ["ELYSE", "ELYS0", "ELYHK", "ELYH0"]
 
+# Multi-channel playback: max simultaneous selections (matches trace color palette size)
+MAX_SELECTED_CHANNELS = 20
+
 # UI Layout settings
 LEFT_PANEL_WIDTH = 250  # Width for Dataset Information and Data Picker panels (in pixels)
 
