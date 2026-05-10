@@ -13,7 +13,7 @@ from pyqtgraph import AxisItem
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from ui.channel_colors import FALLBACK_TRACE_COLOR, channel_color_map
+from .channel_colors import FALLBACK_TRACE_COLOR, channel_color_map
 
 logger = logging.getLogger(__name__)
 

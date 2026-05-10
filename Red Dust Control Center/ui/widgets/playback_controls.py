@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from settings import MAX_SELECTED_CHANNELS
-from ui.channel_colors import FALLBACK_TRACE_COLOR, channel_color_map
+from .channel_colors import FALLBACK_TRACE_COLOR, channel_color_map
 
 logger = logging.getLogger(__name__)
 
