@@ -1,375 +1,273 @@
 """
 Object Manager for streaming normalized data to interactive objects (OSC and Serial).
 """
-from typing import Dict, Optional, Union
+from __future__ import annotations
+
+from typing import Dict, List, Optional
+
 from obspy import UTCDateTime
 from PySide6.QtCore import QObject, QTimer, Signal
 import logging
 
 from core.interactive_object import InteractiveObject
 from core.osc_object import OSCObject
+from core.pin_stream import PinStreamRow
 from core.serial_object import SerialObject
-from settings import SERIAL_BAUDRATE, OSC_OUTPUT_RATE, OSC_OUTPUT_INTERVAL_MS, SERIAL_OUTPUT_RATE, SERIAL_OUTPUT_INTERVAL_MS
+from settings import SERIAL_BAUDRATE, OSC_OUTPUT_INTERVAL_MS, SERIAL_OUTPUT_INTERVAL_MS
 
 logger = logging.getLogger(__name__)
 
-# Backward compatibility: export OSCObject from here
-__all__ = ['OSCManager', 'OSCObject', 'SerialObject']
+__all__ = ["OSCManager", "OSCObject", "SerialObject"]
 
 
 class OSCManager(QObject):
     """Manages streaming to multiple interactive objects (OSC and Serial)."""
-    
-    # Signal emitted when streaming state changes (global)
-    streaming_state_changed = Signal(bool)  # True when streaming starts
-    
-    # Signal emitted when object streaming state changes
-    object_streaming_state_changed = Signal(str, bool)  # Emits (object_name, streaming)
-    
-    # Signal emitted when object value is updated (for UI display)
-    object_value_updated = Signal(str, float)  # Emits (object_name, normalized_value)
-    
-    # Signal emitted when object connection state changes (for Serial objects)
-    object_connection_state_changed = Signal(str, bool)  # Emits (object_name, connected)
-    
+
+    streaming_state_changed = Signal(bool)
+    object_streaming_state_changed = Signal(str, bool)
+    object_value_updated = Signal(str, dict)
+    object_connection_state_changed = Signal(str, bool)
+
     def __init__(self, waveform_model=None, playback_controller=None):
-        """
-        Initialize OSCManager.
-        
-        Args:
-            waveform_model: WaveformModel instance (can be set later)
-            playback_controller: PlaybackController instance (can be set later)
-        """
         super().__init__()
         self._waveform_model = waveform_model
         self._playback_controller = playback_controller
         self._objects: Dict[str, InteractiveObject] = {}
         self._streaming = False
-        
-        # Separate timers for OSC and Serial objects
+
         self._osc_timer = QTimer()
         self._osc_timer.timeout.connect(self._send_osc_frame)
         self._osc_timer.setInterval(OSC_OUTPUT_INTERVAL_MS)
-        
+
         self._serial_timer = QTimer()
         self._serial_timer.timeout.connect(self._send_serial_frame)
         self._serial_timer.setInterval(SERIAL_OUTPUT_INTERVAL_MS)
-    
+
     def set_waveform_model(self, waveform_model) -> None:
-        """
-        Set waveform model.
-        
-        Args:
-            waveform_model: WaveformModel instance
-        """
         self._waveform_model = waveform_model
-    
+
     def set_playback_controller(self, playback_controller) -> None:
-        """
-        Set playback controller.
-        
-        Args:
-            playback_controller: PlaybackController instance
-        """
         self._playback_controller = playback_controller
-    
-    def add_osc_object(self, name: str, address: str, host: str, port: int, remap_min: float = 0.0, remap_max: float = 1.0) -> OSCObject:
-        """
-        Add a new OSC object.
-        
-        Args:
-            name: Unique identifier
-            address: OSC address
-            host: Target IP address
-            port: Target UDP port
-            remap_min: Minimum output value for remapping (default: 0.0)
-            remap_max: Maximum output value for remapping (default: 1.0)
-        
-        Returns:
-            OSCObject instance
-        """
-        if name in self._objects:
-            logger.warning(f"Object {name} already exists, replacing it")
-            self.remove_object(name)
-        
-        obj = OSCObject(name, address, host, port, remap_min, remap_max)
-        self._objects[name] = obj
-        
-        # Start OSC timer if not already running (needed for per-object streaming)
+
+    def add_osc_object(
+        self,
+        object_id: str,
+        address: str,
+        host: str,
+        port: int,
+        pin_rows: Optional[List[PinStreamRow]] = None,
+    ) -> OSCObject:
+        if object_id in self._objects:
+            logger.warning("Object %s already exists, replacing it", object_id)
+            self.remove_object(object_id)
+
+        obj = OSCObject(object_id, address, host, port)
+        if pin_rows:
+            obj.set_pin_rows(pin_rows)
+        self._objects[object_id] = obj
+
         if not self._osc_timer.isActive():
             self._osc_timer.start()
-        
-        logger.info(f"Added OSC object: {name}")
+
+        logger.info("Added OSC object: %s", object_id)
         return obj
-    
-    def add_serial_object(self, name: str, port: str, baudrate: int = None, remap_min: float = 0.0, remap_max: float = 1.0) -> SerialObject:
-        """
-        Add a new Serial object.
-        
-        Args:
-            name: Unique identifier
-            port: Serial port (e.g., "COM3" on Windows, "/dev/ttyUSB0" on Linux)
-            baudrate: Baud rate for serial communication (default: from settings)
-            remap_min: Minimum output value for remapping (default: 0.0)
-            remap_max: Maximum output value for remapping (default: 1.0)
-        
-        Returns:
-            SerialObject instance
-        """
-        if name in self._objects:
-            logger.warning(f"Object {name} already exists, replacing it")
-            self.remove_object(name)
-        
+
+    def add_serial_object(
+        self,
+        object_id: str,
+        port: str,
+        baudrate: int = None,
+        pin_rows: Optional[List[PinStreamRow]] = None,
+    ) -> SerialObject:
+        if object_id in self._objects:
+            logger.warning("Object %s already exists, replacing it", object_id)
+            self.remove_object(object_id)
+
         if baudrate is None:
             baudrate = SERIAL_BAUDRATE
-        
-        obj = SerialObject(name, port, baudrate, remap_min, remap_max)
-        self._objects[name] = obj
-        
-        # Emit connection state signal
-        self.object_connection_state_changed.emit(name, obj.is_connected())
-        
-        # Start Serial timer if not already running (needed for per-object streaming)
+
+        obj = SerialObject(object_id, port, baudrate)
+        if pin_rows:
+            obj.set_pin_rows(pin_rows)
+        self._objects[object_id] = obj
+
+        self.object_connection_state_changed.emit(object_id, obj.is_connected())
+
         if not self._serial_timer.isActive():
             self._serial_timer.start()
-        
-        logger.info(f"Added Serial object: {name}")
+
+        logger.info("Added Serial object: %s", object_id)
         return obj
-    
-    def add_object(self, name: str, address: str, host: str, port: int, remap_min: float = 0.0, remap_max: float = 1.0) -> OSCObject:
-        """
-        Add a new OSC object (backward compatibility method).
-        
-        Args:
-            name: Unique identifier
-            address: OSC address
-            host: Target IP address
-            port: Target UDP port
-            remap_min: Minimum output value for remapping (default: 0.0)
-            remap_max: Maximum output value for remapping (default: 1.0)
-        
-        Returns:
-            OSCObject instance
-        """
-        return self.add_osc_object(name, address, host, port, remap_min, remap_max)
-    
-    def remove_object(self, name: str) -> None:
-        """
-        Remove an object.
-        
-        Args:
-            name: Object identifier
-        """
-        if name in self._objects:
-            obj = self._objects[name]
-            
-            # Stop streaming if active
+
+    def add_object(
+        self,
+        object_id: str,
+        address: str,
+        host: str,
+        port: int,
+        pin_rows: Optional[List[PinStreamRow]] = None,
+    ) -> OSCObject:
+        return self.add_osc_object(object_id, address, host, port, pin_rows)
+
+    def remove_object(self, object_id: str) -> None:
+        if object_id in self._objects:
+            obj = self._objects[object_id]
+
             if obj.streaming_enabled:
-                self.stop_object_streaming(name)
-            
-            # Close connection properly
+                self.stop_object_streaming(object_id)
+
             obj.close()
-            
-            # Emit connection state change for Serial objects
-            from core.serial_object import SerialObject
+
             if isinstance(obj, SerialObject):
-                self.object_connection_state_changed.emit(name, False)
-            
-            del self._objects[name]
-            logger.info(f"Removed object: {name}")
-    
-    def get_object(self, name: str) -> Optional[InteractiveObject]:
-        """
-        Get object by name.
-        
-        Args:
-            name: Object identifier
-        
-        Returns:
-            InteractiveObject or None if not found
-        """
-        return self._objects.get(name)
-    
+                self.object_connection_state_changed.emit(object_id, False)
+
+            del self._objects[object_id]
+            logger.info("Removed object: %s", object_id)
+
+    def get_object(self, object_id: str) -> Optional[InteractiveObject]:
+        return self._objects.get(object_id)
+
     def get_all_objects(self) -> Dict[str, InteractiveObject]:
-        """
-        Get all objects.
-        
-        Returns:
-            Dictionary of name -> InteractiveObject
-        """
         return self._objects.copy()
-    
-    def update_object_remapping(self, name: str, remap_min: float, remap_max: float) -> None:
-        """
-        Update remapping parameters for an object.
-        
-        Args:
-            name: Object identifier
-            remap_min: Minimum output value
-            remap_max: Maximum output value
-        """
-        if name in self._objects:
-            self._objects[name].remap_min = remap_min
-            self._objects[name].remap_max = remap_max
-            logger.debug(f"Updated remapping for {name}: {remap_min} to {remap_max}")
-    
-    def start_object_streaming(self, name: str) -> None:
-        """
-        Start streaming for a specific object.
-        
-        Args:
-            name: Object identifier
-        """
-        if name in self._objects:
-            obj = self._objects[name]
-            
-            # For Serial objects, check connection and try to reconnect if needed
+
+    def update_object_pin_rows(self, object_id: str, pin_rows: List[PinStreamRow]) -> None:
+        if object_id in self._objects:
+            self._objects[object_id].set_pin_rows(pin_rows)
+            logger.debug("Updated pin rows for %s: %s slots", object_id, len(pin_rows))
+
+    def start_object_streaming(self, object_id: str) -> None:
+        if object_id not in self._objects:
+            return
+        obj = self._objects[object_id]
+
+        if not obj.pin_rows:
+            logger.warning("Cannot start streaming for %s: no pin rows", object_id)
+            return
+
+        if isinstance(obj, SerialObject):
+            if not obj.is_connected():
+                logger.warning("Serial object %s is not connected, attempting reconnect", object_id)
+                if not obj.reconnect():
+                    logger.error("Cannot start streaming for %s: Serial connection failed", object_id)
+                    self.object_connection_state_changed.emit(object_id, False)
+                    return
+                self.object_connection_state_changed.emit(object_id, True)
+
+        if not obj.streaming_enabled:
+            obj.streaming_enabled = True
+            self.object_streaming_state_changed.emit(object_id, True)
+            logger.info("Started streaming for object: %s", object_id)
+
             if isinstance(obj, SerialObject):
-                if not obj.is_connected():
-                    logger.warning(f"Serial object {name} is not connected, attempting to reconnect...")
-                    if not obj.reconnect():
-                        logger.error(f"Cannot start streaming for {name}: Serial connection failed")
-                        # Emit connection state change
-                        self.object_connection_state_changed.emit(name, False)
-                        return
-                    else:
-                        # Connection restored
-                        self.object_connection_state_changed.emit(name, True)
-            
-            if not obj.streaming_enabled:
-                obj.streaming_enabled = True
-                self.object_streaming_state_changed.emit(name, True)
-                logger.info(f"Started streaming for object: {name}")
-                
-                # Ensure appropriate timer is running
-                if isinstance(obj, SerialObject):
-                    if not self._serial_timer.isActive():
-                        self._serial_timer.start()
-                else:  # OSC object
-                    if not self._osc_timer.isActive():
-                        self._osc_timer.start()
-    
-    def stop_object_streaming(self, name: str) -> None:
-        """
-        Stop streaming for a specific object.
-        
-        Args:
-            name: Object identifier
-        """
-        if name in self._objects:
-            if self._objects[name].streaming_enabled:
-                self._objects[name].streaming_enabled = False
-                self.object_streaming_state_changed.emit(name, False)
-                logger.info(f"Stopped streaming for object: {name}")
-                
-                # Send zero value when stopping
-                if self._playback_controller:
-                    current_time = self._playback_controller.get_current_timestamp()
-                    if current_time is None:
-                        current_time = UTCDateTime.now()
-                else:
-                    current_time = UTCDateTime.now()
-                
-                # Send zero value
-                obj = self._objects[name]
-                normalized_zero = 0.0
-                remapped_zero = obj.send(normalized_zero, current_time)
-                # Emit value update signal for UI (emit normalized value so card can remap using its own settings)
-                if remapped_zero is not None:
-                    self.object_value_updated.emit(name, normalized_zero)
-                
-                # Stop timers if no objects of that type are streaming
-                if isinstance(obj, SerialObject):
-                    if not any(o.streaming_enabled for o in self._objects.values() if isinstance(o, SerialObject)):
-                        self._serial_timer.stop()
-                else:  # OSC object
-                    if not any(o.streaming_enabled for o in self._objects.values() if isinstance(o, OSCObject)):
-                        self._osc_timer.stop()
-    
-    def is_object_streaming(self, name: str) -> bool:
-        """
-        Check if a specific object is streaming.
-        
-        Args:
-            name: Object identifier
-        
-        Returns:
-            True if object is streaming
-        """
-        if name in self._objects:
-            return self._objects[name].streaming_enabled
-        return False
-    
-    def set_object_enabled(self, name: str, enabled: bool) -> None:
-        """
-        Enable or disable an object (kept for backward compatibility).
-        This now controls per-object streaming state.
-        
-        Args:
-            name: Object identifier
-            enabled: True to enable streaming
-        """
-        if enabled:
-            self.start_object_streaming(name)
-        else:
-            self.stop_object_streaming(name)
-    
-    def start_streaming(self) -> None:
-        """Start streaming (global streaming - kept for backward compatibility)."""
-        if self._streaming:
+                if not self._serial_timer.isActive():
+                    self._serial_timer.start()
+            else:
+                if not self._osc_timer.isActive():
+                    self._osc_timer.start()
+
+    def stop_object_streaming(self, object_id: str) -> None:
+        if object_id not in self._objects:
             return
-        
-        self._streaming = True
-        # Timers are managed per-object now, but we ensure they're running if needed
-        has_osc_objects = any(isinstance(obj, OSCObject) and obj.streaming_enabled for obj in self._objects.values())
-        has_serial_objects = any(isinstance(obj, SerialObject) and obj.streaming_enabled for obj in self._objects.values())
-        if has_osc_objects and not self._osc_timer.isActive():
-            self._osc_timer.start()
-        if has_serial_objects and not self._serial_timer.isActive():
-            self._serial_timer.start()
-        self.streaming_state_changed.emit(True)
-        logger.info("OSC streaming started (global)")
-    
-    def stop_streaming(self) -> None:
-        """Stop OSC streaming and send zero values to all streaming objects."""
-        if not self._streaming:
+        obj = self._objects[object_id]
+        if not obj.streaming_enabled:
             return
-        
-        # Send zero values to all streaming objects (explicit silence)
+
         if self._playback_controller:
             current_time = self._playback_controller.get_current_timestamp()
             if current_time is None:
                 current_time = UTCDateTime.now()
         else:
             current_time = UTCDateTime.now()
-        
+
+        if obj.pin_rows:
+            zeros = [(r.row_id, 0.0) for r in obj.pin_rows]
+            sent = obj.send_pin_bundle(zeros, current_time)
+            if sent is not None:
+                self.object_value_updated.emit(object_id, sent)
+
+        obj.streaming_enabled = False
+        self.object_streaming_state_changed.emit(object_id, False)
+        logger.info("Stopped streaming for object: %s", object_id)
+
+        if isinstance(obj, SerialObject):
+            if not any(
+                o.streaming_enabled
+                for o in self._objects.values()
+                if isinstance(o, SerialObject)
+            ):
+                self._serial_timer.stop()
+        else:
+            if not any(
+                o.streaming_enabled
+                for o in self._objects.values()
+                if isinstance(o, OSCObject)
+            ):
+                self._osc_timer.stop()
+
+    def is_object_streaming(self, object_id: str) -> bool:
+        if object_id in self._objects:
+            return self._objects[object_id].streaming_enabled
+        return False
+
+    def set_object_enabled(self, object_id: str, enabled: bool) -> None:
+        if enabled:
+            self.start_object_streaming(object_id)
+        else:
+            self.stop_object_streaming(object_id)
+
+    def start_streaming(self) -> None:
+        if self._streaming:
+            return
+
+        self._streaming = True
+        has_osc = any(
+            isinstance(obj, OSCObject) and obj.streaming_enabled
+            for obj in self._objects.values()
+        )
+        has_serial = any(
+            isinstance(obj, SerialObject) and obj.streaming_enabled
+            for obj in self._objects.values()
+        )
+        if has_osc and not self._osc_timer.isActive():
+            self._osc_timer.start()
+        if has_serial and not self._serial_timer.isActive():
+            self._serial_timer.start()
+        self.streaming_state_changed.emit(True)
+        logger.info("OSC streaming started (global)")
+
+    def stop_streaming(self) -> None:
+        if not self._streaming:
+            return
+
+        if self._playback_controller:
+            current_time = self._playback_controller.get_current_timestamp()
+            if current_time is None:
+                current_time = UTCDateTime.now()
+        else:
+            current_time = UTCDateTime.now()
+
         for obj in self._objects.values():
-            if obj.streaming_enabled:
-                normalized_zero = 0.0
-                obj.send(normalized_zero, current_time)
-        
+            if obj.streaming_enabled and obj.pin_rows:
+                zeros = [(r.row_id, 0.0) for r in obj.pin_rows]
+                obj.send_pin_bundle(zeros, current_time)
+
         self._streaming = False
         self.streaming_state_changed.emit(False)
         logger.info("OSC streaming stopped (global)")
-    
+
     def is_streaming(self) -> bool:
-        """Check if streaming is active (global state)."""
         return self._streaming
 
     def shutdown(self) -> None:
-        """
-        Stop output timers, stop per-object streaming, and close all OSC/Serial
-        resources. Safe to call more than once.
-        """
         logger.info("OSCManager: shutdown (stopping timers, closing all objects)")
         self._osc_timer.stop()
         self._serial_timer.stop()
         try:
-            for name in list(self._objects.keys()):
+            for oid in list(self._objects.keys()):
                 try:
-                    self.remove_object(name)
+                    self.remove_object(oid)
                 except Exception as e:
-                    logger.warning("OSCManager: failed to remove object %s: %s", name, e)
+                    logger.warning("OSCManager: failed to remove object %s: %s", oid, e)
         finally:
             self._osc_timer.stop()
             self._serial_timer.stop()
@@ -378,45 +276,49 @@ class OSCManager(QObject):
                 self.streaming_state_changed.emit(False)
             logger.info("OSCManager: shutdown complete")
 
-    def _send_osc_frame(self) -> None:
-        """Send one frame of data to all streaming OSC objects (called by OSC timer)."""
-        if self._waveform_model is None or self._playback_controller is None:
-            return
-        
-        # Get current timestamp from playback controller
-        current_time = self._playback_controller.get_current_timestamp()
-        if current_time is None:
-            return
-        
-        # Get normalized value from waveform model
-        normalized_value = self._waveform_model.get_normalized_value(current_time)
-        
-        # Send to all OSC objects that have streaming enabled
-        for obj in self._objects.values():
-            if isinstance(obj, OSCObject) and obj.streaming_enabled:
-                remapped_value = obj.send(normalized_value, current_time)
-                # Emit signal for UI updates (emit normalized value so card can remap using its own settings)
-                if remapped_value is not None:
-                    self.object_value_updated.emit(obj.name, normalized_value)
-    
-    def _send_serial_frame(self) -> None:
-        """Send one frame of data to all streaming Serial objects (called by Serial timer)."""
-        if self._waveform_model is None or self._playback_controller is None:
-            return
-        
-        # Get current timestamp from playback controller
-        current_time = self._playback_controller.get_current_timestamp()
-        if current_time is None:
-            return
-        
-        # Get normalized value from waveform model
-        normalized_value = self._waveform_model.get_normalized_value(current_time)
-        
-        # Send to all Serial objects that have streaming enabled
-        for obj in self._objects.values():
-            if isinstance(obj, SerialObject) and obj.streaming_enabled:
-                remapped_value = obj.send(normalized_value, current_time)
-                # Emit signal for UI updates (emit normalized value so card can remap using its own settings)
-                if remapped_value is not None:
-                    self.object_value_updated.emit(obj.name, normalized_value)
+    def _build_ordered_values(self, obj: InteractiveObject, current_time: UTCDateTime):
+        if not self._waveform_model or not obj.pin_rows:
+            return None
+        ordered = []
+        for row in obj.pin_rows:
+            n = self._waveform_model.get_normalized_value_for_channel(
+                row.channel_id, current_time
+            )
+            ordered.append((row.row_id, n))
+        return ordered
 
+    def _send_osc_frame(self) -> None:
+        if self._waveform_model is None or self._playback_controller is None:
+            return
+
+        current_time = self._playback_controller.get_current_timestamp()
+        if current_time is None:
+            return
+
+        for obj in self._objects.values():
+            if not isinstance(obj, OSCObject) or not obj.streaming_enabled:
+                continue
+            ordered = self._build_ordered_values(obj, current_time)
+            if not ordered:
+                continue
+            sent = obj.send_pin_bundle(ordered, current_time)
+            if sent is not None:
+                self.object_value_updated.emit(obj.object_id, sent)
+
+    def _send_serial_frame(self) -> None:
+        if self._waveform_model is None or self._playback_controller is None:
+            return
+
+        current_time = self._playback_controller.get_current_timestamp()
+        if current_time is None:
+            return
+
+        for obj in self._objects.values():
+            if not isinstance(obj, SerialObject) or not obj.streaming_enabled:
+                continue
+            ordered = self._build_ordered_values(obj, current_time)
+            if not ordered:
+                continue
+            sent = obj.send_pin_bundle(ordered, current_time)
+            if sent is not None:
+                self.object_value_updated.emit(obj.object_id, sent)

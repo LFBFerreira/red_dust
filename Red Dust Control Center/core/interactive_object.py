@@ -1,35 +1,40 @@
 """
 Abstract base class for interactive objects supporting different communication protocols.
 
-Normalized values passed to send() are computed from WaveformModel for the current
-reference channel (first selected channel in canonical order) while playback runs.
-If no channel is selected, playback is stopped and there is no playhead-driven
-streaming from the main timeline.
-"""
-from abc import ABC, abstractmethod
-from typing import Optional
-from obspy import UTCDateTime
-import logging
+Multi-pin streaming: each object has an ordered list of PinStreamRow entries.
+Per tick, normalized values (0..1) per waveform channel are remapped and sent as
+N floats (Pin_A .. in row order) plus one ISO8601 UTC timestamp string.
 
-logger = logging.getLogger(__name__)
+Firmware contract: OSC message at base address, typetag (f * N)(s); Serial line
+v1,...,vN,timestamp\\n — see core/osc_object.py and core/serial_object.py.
+"""
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import List, Optional, Tuple
+
+from obspy import UTCDateTime
+
+from core.pin_stream import PinStreamRow, remap_normalized
+from settings import MAX_PIN_SLOTS
 
 
 class InteractiveObject(ABC):
     """Abstract base class for interactive objects."""
 
-    def __init__(self, name: str, remap_min: float = 0.0, remap_max: float = 1.0):
+    def __init__(self, object_id: str):
         """
-        Initialize interactive object.
-
         Args:
-            name: Unique identifier for the object
-            remap_min: Minimum output value for remapping (default: 0.0)
-            remap_max: Maximum output value for remapping (default: 1.0)
+            object_id: Stable unique id (e.g. UUID) for this object
         """
-        self.name = name
-        self.remap_min = remap_min
-        self.remap_max = remap_max
+        self.object_id = object_id
+        self.pin_rows: List[PinStreamRow] = []
         self.streaming_enabled = False
+
+    @property
+    def name(self) -> str:
+        """Backward-compatible alias for session and logging."""
+        return self.object_id
 
     @property
     @abstractmethod
@@ -37,38 +42,25 @@ class InteractiveObject(ABC):
         """Return the communication type (e.g., 'OSC', 'Serial')."""
         pass
 
-    def remap_value(self, normalized_value: float) -> float:
-        """
-        Remap normalized value (0-1) to output range.
+    def set_pin_rows(self, rows: List[PinStreamRow]) -> None:
+        self.pin_rows = list(rows[:MAX_PIN_SLOTS])
 
-        Args:
-            normalized_value: Normalized input value (0..1)
-
-        Returns:
-            Remapped value in range [remap_min, remap_max]
-        """
-        normalized_value = max(0.0, min(1.0, normalized_value))
-
-        if self.remap_max == self.remap_min:
-            return self.remap_min
-
-        return self.remap_min + (normalized_value * (self.remap_max - self.remap_min))
+    @staticmethod
+    def remap_for_row(normalized_value: float, row: PinStreamRow) -> float:
+        return remap_normalized(normalized_value, row.remap_min, row.remap_max)
 
     @abstractmethod
-    def send(self, normalized_value: float, timestamp: UTCDateTime) -> Optional[float]:
+    def send_pin_bundle(
+        self,
+        ordered_normalized: List[Tuple[str, float]],
+        timestamp: UTCDateTime,
+    ) -> Optional[Dict[str, float]]:
         """
-        Send data with remapped value.
-
-        The normalized_value reflects the waveform model's reference channel during
-        playback. It is not tied to a trace when no channel is selected (playback
-        stopped for that case).
-
-        Args:
-            normalized_value: Normalized value (0..1) from the waveform model
-            timestamp: UTC timestamp
+        Send one frame: ordered_normalized is (row_id, 0..1) in pin slot order;
+        length must match len(self.pin_rows).
 
         Returns:
-            Remapped value that was sent (for UI updates), or None if failed
+            Map row_id -> normalized (0..1) for UI when send succeeds, else None.
         """
         pass
 

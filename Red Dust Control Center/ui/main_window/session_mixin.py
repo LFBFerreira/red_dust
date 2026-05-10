@@ -113,6 +113,7 @@ class MainWindowSessionMixin(_MainWindowBase):
                 self.playback_controller,
                 self.osc_manager,
                 self.data_picker,
+                self.object_cards,
             )
 
             self.session_manager.save_session(file_path, state)
@@ -159,6 +160,7 @@ class MainWindowSessionMixin(_MainWindowBase):
                     state["objects"],
                     self.osc_manager,
                     self.object_cards,
+                    state,
                 )
 
             if self.waveform_model.get_stream():

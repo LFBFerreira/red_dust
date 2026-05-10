@@ -251,6 +251,23 @@ class WaveformModel:
             raw_value, self._normalization_min, self._normalization_max
         )
 
+    def get_normalized_value_for_channel(
+        self, channel_id: str, timestamp: UTCDateTime
+    ) -> float:
+        """
+        Normalized sample (0..1) for a channel using that trace's percentile bounds,
+        independent of the active reference channel.
+        """
+        if channel_id not in self._channels:
+            return 0.0
+        raw_value = self.get_raw_value_for_channel(channel_id, timestamp)
+        if raw_value is None:
+            return 0.0
+        bounds = self._norm_bounds_for_channel(channel_id)
+        if bounds is None:
+            return 0.0
+        return self._normalize_raw_with_bounds(raw_value, bounds[0], bounds[1])
+
     def _raw_and_norm_for_channel(
         self, channel_id: str, timestamp: UTCDateTime
     ) -> Tuple[Optional[float], Optional[float]]:

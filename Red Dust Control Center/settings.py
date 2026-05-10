@@ -27,6 +27,11 @@ WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default width for Waveform Viewer (in pix
 # Interactive Objects settings
 INTERACTIVE_OBJECTS_HEIGHT = 300  # Fixed height for Interactive Objects tab panel (in pixels)
 
+# Multi-pin streaming: max rows per object (ESP / Arduino firmware contract)
+MAX_PIN_SLOTS = 5
+# Wire order: index 0 = first float in OSC/Serial frame (Pin_A), etc.
+PIN_SLOT_LABELS = ("Pin_A", "Pin_B", "Pin_C", "Pin_D", "Pin_E")
+
 # OSC Streaming settings
 STREAMING_PORT = 8000  # Default UDP port for OSC streaming (can be overridden per object)
 OSC_OUTPUT_RATE = 60  # Transmission rate for OSC connections (Hz)

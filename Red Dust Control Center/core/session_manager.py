@@ -2,12 +2,13 @@
 Session Manager for saving and loading application state.
 """
 import json
+import uuid
 from pathlib import Path
 from typing import Dict, Optional, Any
 from obspy import UTCDateTime
 import logging
 
-from settings import SERIAL_BAUDRATE
+from settings import SERIAL_BAUDRATE, STREAMING_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,15 @@ class SessionManager:
             logger.error(f"Failed to load session: {e}")
             raise
     
-    def create_state_dict(self, data_manager, waveform_model, playback_controller, osc_manager, data_picker=None) -> Dict[str, Any]:
+    def create_state_dict(
+        self,
+        data_manager,
+        waveform_model,
+        playback_controller,
+        osc_manager,
+        data_picker=None,
+        object_cards=None,
+    ) -> Dict[str, Any]:
         """
         Create state dictionary from current application state.
         
@@ -141,15 +150,26 @@ class SessionManager:
                 state['playback']['loop_start'] = None
                 state['playback']['loop_end'] = None
         
-        # Interactive objects (OSC and Serial)
-        if osc_manager:
-            objects = []
-            for name, obj in osc_manager.get_all_objects().items():
+        # Interactive objects (OSC and Serial) — prefer live card config for title + pin_rows
+        objects = []
+        if object_cards and osc_manager:
+            for cfg in object_cards.get_all_configs():
+                oid = cfg.get("object_id")
+                if not oid:
+                    continue
+                entry = dict(cfg)
+                o = osc_manager.get_object(oid)
+                if o:
+                    entry["streaming_enabled"] = o.streaming_enabled
+                objects.append(entry)
+        elif osc_manager:
+            for _, obj in osc_manager.get_all_objects().items():
                 obj_config = obj.get_config_dict()
-                obj_config['streaming_enabled'] = obj.streaming_enabled
+                obj_config["streaming_enabled"] = obj.streaming_enabled
                 objects.append(obj_config)
-            state['objects'] = objects
-        
+        if objects:
+            state["objects"] = objects
+
         return state
     
     def _make_serializable(self, obj: Any) -> Any:
@@ -214,95 +234,121 @@ class SessionManager:
             'doy': doy
         }
     
-    def restore_objects(self, objects: list, osc_manager, object_cards) -> None:
+    def _migrate_interactive_object_config(
+        self, obj_config: dict, session_state: Optional[dict]
+    ) -> dict:
+        cfg = dict(obj_config)
+        if "scale" in cfg and "remap_max" not in cfg:
+            cfg["remap_max"] = cfg.pop("scale")
+            cfg["remap_min"] = 0.0
+        if "enabled" in cfg and "streaming_enabled" not in cfg:
+            cfg["streaming_enabled"] = cfg.pop("enabled")
+
+        oid = cfg.get("object_id") or cfg.get("name")
+        if not oid:
+            oid = str(uuid.uuid4())
+        cfg["object_id"] = oid
+        if "title" not in cfg:
+            cfg["title"] = str(cfg.get("name", "Object"))
+
+        if cfg.get("pin_rows"):
+            return cfg
+
+        remap_min = cfg.get("remap_min")
+        remap_max = cfg.get("remap_max")
+        if remap_min is None or remap_max is None:
+            scale = cfg.get("scale", 1.0)
+            remap_min = 0.0
+            remap_max = scale
+
+        ch = None
+        if session_state:
+            raw = session_state.get("selected_channels") or []
+            if isinstance(raw, list) and raw:
+                ch = raw[0]
+        if ch:
+            cfg["pin_rows"] = [
+                {
+                    "row_id": str(uuid.uuid4()),
+                    "channel_id": ch,
+                    "remap_min": float(remap_min),
+                    "remap_max": float(remap_max),
+                    "slot_index": 0,
+                }
+            ]
+        else:
+            cfg["pin_rows"] = []
+        return cfg
+
+    def restore_objects(
+        self,
+        objects: list,
+        osc_manager,
+        object_cards,
+        session_state: Optional[dict] = None,
+    ) -> None:
         """
-        Restore OSC objects configuration.
-        
+        Restore interactive objects (OSC and Serial).
+
         Args:
             objects: List of object configuration dictionaries
             osc_manager: OSCManager instance
             object_cards: ObjectCardsContainer instance
+            session_state: Full session dict (optional, for legacy pin_row migration)
         """
         if not objects:
             return
-        
-        logger.info(f"Restoring {len(objects)} OSC objects")
-        
-        # Clear existing objects
+
+        logger.info("Restoring %s interactive objects", len(objects))
+
         if object_cards:
-            # Remove all existing cards (this will trigger proper cleanup)
-            card_names = list(object_cards._cards.keys())
-            for name in card_names:
-                object_cards._remove_object(name)
-        
+            oids = list(object_cards._cards.keys())
+            for oid in oids:
+                object_cards._remove_object(oid)
+
         if osc_manager:
-            # Properly close all object connections before clearing
-            for name in list(osc_manager._objects.keys()):
-                osc_manager.remove_object(name)
-        
-        # Add restored objects
+            for oid in list(osc_manager._objects.keys()):
+                osc_manager.remove_object(oid)
+
         for obj_config in objects:
-            name = obj_config.get('name')
-            if name:
-                # Add card
-                if object_cards:
-                    # Determine communication type from config
-                    comm_type = obj_config.get('type', 'OSC')
-                    card = object_cards._add_object(comm_type, name)
-                    # Convert old format to new format if needed
-                    config = obj_config.copy()
-                    if 'scale' in config and 'remap_max' not in config:
-                        # Backward compatibility: convert scale to remap_max
-                        config['remap_max'] = config.pop('scale')
-                        config['remap_min'] = 0.0
-                    if 'enabled' in config and 'streaming_enabled' not in config:
-                        # Backward compatibility: convert enabled to streaming_enabled
-                        config['streaming_enabled'] = config.pop('enabled')
-                    card.set_config(config)
-                
-                # Add object (OSC or Serial)
-                if osc_manager:
-                    comm_type = obj_config.get('type', 'OSC')  # Default to OSC for backward compatibility
-                    remap_min = obj_config.get('remap_min')
-                    remap_max = obj_config.get('remap_max')
-                    
-                    # Backward compatibility: convert old scale to remap_max
-                    if remap_min is None or remap_max is None:
-                        scale = obj_config.get('scale', 1.0)
-                        remap_min = 0.0
-                        remap_max = scale
-                    
-                    if comm_type == 'OSC':
-                        osc_manager.add_osc_object(
-                            name,
-                            obj_config.get('address', f'/red_dust/{name.lower().replace(" ", "_")}'),
-                            obj_config.get('host', '127.0.0.1'),
-                            obj_config.get('port', 8000),
-                            remap_min,
-                            remap_max
-                        )
-                    elif comm_type == 'Serial':
-                        osc_manager.add_serial_object(
-                            name,
-                            obj_config.get('port', 'COM3'),
-                            obj_config.get('baudrate', SERIAL_BAUDRATE),
-                            remap_min,
-                            remap_max
-                        )
-                    else:
-                        logger.warning(f"Unknown communication type {comm_type} for object {name}, skipping")
-                        continue
-                    
-                    # Restore streaming state (but don't auto-start)
-                    streaming_enabled = obj_config.get('streaming_enabled', False)
-                    # Also check old 'enabled' for backward compatibility
-                    if 'enabled' in obj_config and 'streaming_enabled' not in obj_config:
-                        streaming_enabled = obj_config.get('enabled', False)
-                    
-                    if streaming_enabled:
-                        # Don't auto-start streaming when loading session
-                        # User must manually start streaming
-                        pass
-                    else:
-                        osc_manager.stop_object_streaming(name)
+            cfg = self._migrate_interactive_object_config(obj_config, session_state)
+            oid = cfg["object_id"]
+            comm_type = cfg.get("type", "OSC")
+
+            cfg["streaming_enabled"] = False
+
+            if object_cards:
+                card = object_cards._add_object(
+                    comm_type,
+                    object_id=oid,
+                    display_title=cfg.get("title", "Object"),
+                    emit_added=False,
+                )
+                card.set_config(cfg)
+                object_cards.object_added.emit(oid)
+            elif osc_manager:
+                from core.pin_stream import pin_rows_from_dicts
+
+                pin_rows = pin_rows_from_dicts(cfg.get("pin_rows") or [])
+                if comm_type == "OSC":
+                    osc_manager.add_osc_object(
+                        oid,
+                        cfg.get("address", f"/red_dust/{oid.lower().replace(' ', '_')}"),
+                        cfg.get("host", "127.0.0.1"),
+                        cfg.get("port", STREAMING_PORT),
+                        pin_rows,
+                    )
+                elif comm_type == "Serial":
+                    osc_manager.add_serial_object(
+                        oid,
+                        cfg.get("port", "COM3"),
+                        cfg.get("baudrate", SERIAL_BAUDRATE),
+                        pin_rows,
+                    )
+                else:
+                    logger.warning(
+                        "Unknown communication type %s for object %s, skipping",
+                        comm_type,
+                        oid,
+                    )
 

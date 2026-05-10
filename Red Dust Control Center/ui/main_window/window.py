@@ -144,7 +144,12 @@ class MainWindow(
 
         main_layout.addWidget(row2_splitter)
 
-        self.object_cards = ObjectCardsContainer()
+        self.object_cards = ObjectCardsContainer(
+            selected_channels_provider=lambda: self._valid_selected_channels_for_io(),
+            sorted_stream_channels_provider=lambda: sorted(
+                self.waveform_model.get_all_channels()
+            ),
+        )
         main_layout.addWidget(self.object_cards)
 
         self.log_viewer = LogViewer()
