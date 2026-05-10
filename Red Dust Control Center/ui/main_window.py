@@ -429,7 +429,6 @@ class MainWindow(QMainWindow):
         channels = self.waveform_model.get_all_channels()
         logger.info(f"Found {len(channels)} channels: {channels}")
         self.playback_controls.set_channels(channels)
-        self._update_serial_object_channel_options()
         
         # Set active channel
         active_channel = self.waveform_model.get_active_channel()
@@ -595,9 +594,6 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
         card = self.object_cards.get_card(name)
         if not card:
             return
-
-        if card.get_config().get('type') == 'Serial':
-            card.set_available_input_channels(self.waveform_model.get_all_channels())
         
         # Connect streaming signals for new card
         card.streaming_started.connect(self._on_card_streaming_started)
@@ -617,8 +613,6 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
             )
         elif comm_type == 'Serial':
             port = config.get('port', '')
-            input_channels = config.get('input_channels', ["Active Channel", "Active Channel"])
-            norm_threshold = config.get('norm_threshold', 0.0)
             # Only create Serial object if port is selected (not placeholder)
             if port and port != "Select port...":
                 self.osc_manager.add_serial_object(
@@ -626,9 +620,7 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
                     port,
                     config.get('baudrate', SERIAL_BAUDRATE),
                     config.get('remap_min', 0.0),
-                    config.get('remap_max', 1.0),
-                    input_channels=input_channels,
-                    norm_threshold=norm_threshold
+                    config.get('remap_max', 1.0)
                 )
                 # Try to open the port when user selects it
                 obj = self.osc_manager.get_object(name)
@@ -647,9 +639,7 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
                     "Select port...",
                     config.get('baudrate', SERIAL_BAUDRATE),
                     config.get('remap_min', 0.0),
-                    config.get('remap_max', 1.0),
-                    input_channels=input_channels,
-                    norm_threshold=norm_threshold
+                    config.get('remap_max', 1.0)
                 )
                 # Connection state is False (no port selected)
                 card.set_connection_state(False)
@@ -690,12 +680,6 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
             # For Serial objects, check if port changed
             if hasattr(obj, 'port') and hasattr(obj, 'baudrate'):
                 new_port = config.get('port', '')
-                input_channels = config.get('input_channels', ["Active Channel", "Active Channel"])
-                norm_threshold = config.get('norm_threshold', 0.0)
-
-                if isinstance(obj, SerialObject):
-                    obj.update_input_channels(input_channels)
-                    obj.set_norm_threshold(norm_threshold)
                 # Only recreate if port actually changed and is not placeholder
                 if new_port and new_port != "Select port..." and obj.port != new_port:
                     needs_recreate = True
@@ -734,8 +718,6 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
                 )
             elif comm_type == 'Serial':
                 new_port = config.get('port', '')
-                input_channels = config.get('input_channels', ["Active Channel", "Active Channel"])
-                norm_threshold = config.get('norm_threshold', 0.0)
                 # Only create if port is selected (not placeholder)
                 if new_port and new_port != "Select port...":
                     self.osc_manager.add_serial_object(
@@ -743,9 +725,7 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
                         new_port,
                         config.get('baudrate', SERIAL_BAUDRATE),
                         config.get('remap_min', 0.0),
-                        config.get('remap_max', 1.0),
-                        input_channels=input_channels,
-                        norm_threshold=norm_threshold
+                        config.get('remap_max', 1.0)
                     )
                     # Try to open the port
                     new_obj = self.osc_manager.get_object(name)
@@ -807,14 +787,6 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
         if active_channel:
             for card in self.object_cards._cards.values():
                 card.set_active_channel(active_channel)
-        self._update_serial_object_channel_options()
-
-    def _update_serial_object_channel_options(self) -> None:
-        """Update waveform channel options for all Serial object routing dropdowns."""
-        available_channels = self.waveform_model.get_all_channels()
-        for card in self.object_cards._cards.values():
-            if card.get_config().get('type') == 'Serial':
-                card.set_available_input_channels(available_channels)
     
     def _on_card_streaming_started(self, name: str):
         """Handle card start button clicked."""

@@ -25,7 +25,6 @@ class WaveformModel:
         self._hi_percentile = 99.0
         self._normalization_min = None
         self._normalization_max = None
-        self._channel_normalization_ranges = {}
         
         if stream is not None:
             self._channels = self._extract_channels()
@@ -57,7 +56,6 @@ class WaveformModel:
         """
         self._stream = stream
         self._channels = self._extract_channels()
-        self._channel_normalization_ranges = {}
         if self._channels:
             self.set_active_channel(self._channels[0])
         else:
@@ -103,44 +101,13 @@ class WaveformModel:
         if self._stream is None or self._active_channel is None:
             return None
         
-        return self._get_trace_for_channel(self._active_channel)
-
-    def _get_trace_for_channel(self, channel: str):
-        """Get ObsPy Trace for a specific channel identifier."""
-        if self._stream is None or not channel:
-            return None
-        if '.' not in channel:
-            return None
-
-        location, channel_code = channel.split('.')
+        location, channel = self._active_channel.split('.')
         
         for trace in self._stream:
-            if trace.stats.location == location and trace.stats.channel == channel_code:
+            if trace.stats.location == location and trace.stats.channel == channel:
                 return trace
         
         return None
-
-    def _calculate_normalization_range_for_trace(self, trace) -> tuple[float, float]:
-        """Calculate normalization range (lo, hi) for a trace."""
-        if trace is None or len(trace.data) == 0:
-            return (0.0, 1.0)
-
-        data = np.array(trace.data, copy=True)
-        valid_mask = np.isfinite(data)
-
-        SENTINEL_MIN = -2147483640
-        SENTINEL_MAX = 2147483640
-        valid_mask = valid_mask & (data > SENTINEL_MIN) & (data < SENTINEL_MAX)
-        valid_data = data[valid_mask]
-
-        if len(valid_data) == 0:
-            return (0.0, 1.0)
-
-        lo_val = float(np.percentile(valid_data, self._lo_percentile))
-        hi_val = float(np.percentile(valid_data, self._hi_percentile))
-        if lo_val > hi_val:
-            lo_val, hi_val = hi_val, lo_val
-        return (lo_val, hi_val)
     
     def _recalculate_normalization(self) -> None:
         """Recalculate normalization parameters for active channel."""
@@ -194,12 +161,12 @@ class WaveformModel:
         # Calculate percentiles - this can be slow for large datasets
         logger.debug(f"Computing percentiles P{self._lo_percentile} and P{self._hi_percentile}...")
         percentile_start = time.time()
-        active_range = self._calculate_normalization_range_for_trace(trace)
+        lo_val = np.percentile(valid_data, self._lo_percentile)
+        hi_val = np.percentile(valid_data, self._hi_percentile)
         percentile_time = time.time() - percentile_start
         
-        self._normalization_min, self._normalization_max = active_range
-        if self._active_channel:
-            self._channel_normalization_ranges[self._active_channel] = active_range
+        self._normalization_min = float(lo_val)
+        self._normalization_max = float(hi_val)
         
         # Ensure min <= max (should always be true for percentiles, but check anyway)
         if self._normalization_min > self._normalization_max:
@@ -225,22 +192,8 @@ class WaveformModel:
         
         self._lo_percentile = lo_percentile
         self._hi_percentile = hi_percentile
-        self._channel_normalization_ranges = {}
         self._recalculate_normalization()
         logger.info(f"Scaling updated: P{lo_percentile}-P{hi_percentile}")
-
-    def _get_or_calculate_channel_range(self, channel: str) -> tuple[float, float]:
-        """Get cached normalization range for channel or calculate it lazily."""
-        if channel in self._channel_normalization_ranges:
-            return self._channel_normalization_ranges[channel]
-
-        trace = self._get_trace_for_channel(channel)
-        if trace is None:
-            return (0.0, 1.0)
-
-        value_range = self._calculate_normalization_range_for_trace(trace)
-        self._channel_normalization_ranges[channel] = value_range
-        return value_range
     
     def get_raw_value(self, timestamp: UTCDateTime) -> Optional[float]:
         """
@@ -352,46 +305,6 @@ class WaveformModel:
         normalized = max(0.0, min(1.0, normalized))
         
         return normalized
-
-    def get_normalized_value_for_channel(self, timestamp: UTCDateTime, channel: str) -> float:
-        """
-        Get normalized value (0..1) for a specific channel at given timestamp.
-
-        Args:
-            timestamp: UTC timestamp
-            channel: Channel identifier (e.g., "03.BHU")
-
-        Returns:
-            Normalized value between 0.0 and 1.0, or 0.0 if out of range/invalid
-        """
-        trace = self._get_trace_for_channel(channel)
-        if trace is None:
-            return 0.0
-
-        start_time = trace.stats.starttime
-        end_time = trace.stats.endtime
-        if timestamp < start_time or timestamp > end_time:
-            return 0.0
-
-        sample_rate = trace.stats.sampling_rate
-        time_offset = timestamp - start_time
-        sample_index = int(time_offset * sample_rate)
-        sample_index = max(0, min(sample_index, len(trace.data) - 1))
-
-        try:
-            raw_value = float(trace.data[sample_index])
-            if not np.isfinite(raw_value):
-                return 0.0
-        except (ValueError, TypeError):
-            return 0.0
-
-        norm_min, norm_max = self._get_or_calculate_channel_range(channel)
-        if norm_max == norm_min:
-            return 0.5
-
-        clamped_value = max(norm_min, min(raw_value, norm_max))
-        normalized = (clamped_value - norm_min) / (norm_max - norm_min)
-        return max(0.0, min(1.0, normalized))
     
     def get_time_range(self) -> Optional[Tuple[UTCDateTime, UTCDateTime]]:
         """

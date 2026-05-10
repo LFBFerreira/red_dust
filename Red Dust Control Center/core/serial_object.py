@@ -1,7 +1,7 @@
 """
 Serial implementation of InteractiveObject.
 """
-from typing import Optional, List
+from typing import Optional
 from obspy import UTCDateTime
 import serial
 import logging
@@ -14,16 +14,7 @@ logger = logging.getLogger(__name__)
 class SerialObject(InteractiveObject):
     """Serial implementation of interactive object."""
     
-    def __init__(
-        self,
-        name: str,
-        port: str,
-        baudrate: int = 9600,
-        remap_min: float = 0.0,
-        remap_max: float = 1.0,
-        input_channels: Optional[List[str]] = None,
-        norm_threshold: float = 0.0
-    ):
+    def __init__(self, name: str, port: str, baudrate: int = 9600, remap_min: float = 0.0, remap_max: float = 1.0):
         """
         Initialize Serial object.
         
@@ -40,12 +31,6 @@ class SerialObject(InteractiveObject):
         self._serial = None
         self._connection_failed = False
         self._port_opened = False  # Track if port has been explicitly opened
-        if input_channels is None:
-            input_channels = ["Active Channel", "Active Channel"]
-        if len(input_channels) < 2:
-            input_channels = (input_channels + ["Active Channel", "Active Channel"])[:2]
-        self.input_channels = input_channels[:2]
-        self.norm_threshold = max(0.0, min(1.0, float(norm_threshold)))
         
         # Don't open port automatically - wait for explicit user selection
     
@@ -112,27 +97,6 @@ class SerialObject(InteractiveObject):
         """
         self.port = port
         return self.open_port()
-
-    def update_input_channels(self, input_channels: List[str]) -> None:
-        """
-        Update waveform source channels for serial input channels.
-
-        Args:
-            input_channels: Two-element list of channel identifiers
-        """
-        if not input_channels:
-            return
-        if len(input_channels) < 2:
-            input_channels = (input_channels + ["Active Channel", "Active Channel"])[:2]
-        self.input_channels = input_channels[:2]
-
-    def set_norm_threshold(self, threshold: float) -> None:
-        """
-        Set normalized activation threshold.
-
-        Values below this threshold are sent as 0.0 (off).
-        """
-        self.norm_threshold = max(0.0, min(1.0, float(threshold)))
     
     def send(self, normalized_value: float, timestamp: UTCDateTime) -> Optional[float]:
         """
@@ -145,45 +109,20 @@ class SerialObject(InteractiveObject):
         Returns:
             Remapped value that was sent (for UI updates)
         """
-        # Backward compatibility: mirror one value to both channels if called.
-        return self.send_channel_values([normalized_value, normalized_value], timestamp)
-
-    def send_channel_values(self, normalized_values: List[float], timestamp: UTCDateTime) -> Optional[float]:
-        """
-        Send two serial channel values with remapping.
-
-        Args:
-            normalized_values: List with two normalized values (0..1), one per input channel
-            timestamp: UTC timestamp
-
-        Returns:
-            First remapped value that was sent (for UI updates)
-        """
         if not self.streaming_enabled or self._serial is None or not self._serial.is_open:
             return None
-
-        if not normalized_values:
-            return None
-
-        values = normalized_values[:2]
-        if len(values) < 2:
-            values = (values + [values[0]])[:2]
-
-        remapped = []
-        for value in values:
-            if value < self.norm_threshold:
-                remapped.append(0.0)
-            else:
-                remapped.append(self.remap_value(value))
-
+        
+        # Apply remapping
+        output_value = self.remap_value(normalized_value)
+        
         # Format timestamp as ISO8601 UTC string
         timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
+        
         try:
-            # Send as string: "value_ch1,value_ch2,timestamp\n"
-            message = f"{remapped[0]:.6f},{remapped[1]:.6f},{timestamp_str}\n"
+            # Send as string: "value,timestamp\n"
+            message = f"{output_value:.6f},{timestamp_str}\n"
             self._serial.write(message.encode('utf-8'))
-            return remapped[0]
+            return output_value
         except Exception as e:
             logger.error(f"Failed to send Serial message for {self.name}: {e}")
             return None
@@ -215,7 +154,5 @@ class SerialObject(InteractiveObject):
             'port': self.port,
             'baudrate': self.baudrate,
             'remap_min': self.remap_min,
-            'remap_max': self.remap_max,
-            'input_channels': self.input_channels,
-            'norm_threshold': self.norm_threshold
+            'remap_max': self.remap_max
         }

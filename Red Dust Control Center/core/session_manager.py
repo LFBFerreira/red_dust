@@ -217,7 +217,7 @@ class SessionManager:
     
     def restore_objects(self, objects: list, osc_manager, object_cards) -> None:
         """
-        Restore interactive objects configuration.
+        Restore OSC objects configuration.
         
         Args:
             objects: List of object configuration dictionaries
@@ -288,9 +288,7 @@ class SessionManager:
                             obj_config.get('port', 'COM3'),
                             obj_config.get('baudrate', SERIAL_BAUDRATE),
                             remap_min,
-                            remap_max,
-                            input_channels=obj_config.get('input_channels', ["Active Channel", "Active Channel"]),
-                            norm_threshold=obj_config.get('norm_threshold', 0.0)
+                            remap_max
                         )
                     else:
                         logger.warning(f"Unknown communication type {comm_type} for object {name}, skipping")
