@@ -1,15 +1,8 @@
-// Forward declaration to satisfy Arduino's auto-prototype generation
-struct InputChannelState;
+#include <SoftwareSerial.h>
 
 // Configuration constants
-// Mode B (LilyGO T-Display ESP32 + MAX9744 + Dayton exciter)
-// - CH1 drives audio amplitude via ESP32 DAC -> MAX9744 line input
-// - CH2 drives vibration motor via PWM (LEDC)
-//
-// Avoid TFT pins (given): 4, 5, 16, 18, 19, 23
-// Avoid common strapping pins for external hardware if possible: 0, 2, 12, 15
-#define AUDIO_DAC_PIN 25              // ESP32 DAC1 (analog out) -> MAX9744 INL/INR
-#define VIBRATION_MOTOR_PIN_CH2 32    // PWM pin for channel 2 output (motor driver input)
+#define VIBRATION_MOTOR_PIN_CH1 9   // PWM pin for channel 1 output
+#define VIBRATION_MOTOR_PIN_CH2 10  // PWM pin for channel 2 output
 
 // PWM mapping configuration
 #define PWM_MIN 0      // Minimum PWM value (motor off)
@@ -17,128 +10,11 @@ struct InputChannelState;
 
 // Serial communication configuration
 #define SERIAL_BAUD_RATE 115200            // USB serial communication baud rate
-#define AUX_SERIAL_BAUD_RATE 9600          // AUX UART baud rate
-#define AUX_SERIAL_RX_PIN 27               // AUX UART RX pin (avoid TFT pins / I2C pins)
-#define AUX_SERIAL_TX_PIN 13               // AUX UART TX pin (can be unused)
+#define AUX_SERIAL_BAUD_RATE 9600          // SoftwareSerial baud rate (stable on Uno)
+#define AUX_SERIAL_RX_PIN 2                // SoftwareSerial RX pin (input channel 2)
+#define AUX_SERIAL_TX_PIN 3                // SoftwareSerial TX pin (unused, required by library)
 
-// MAX9744 volume control (I2C)
-// Typical default address is 0x4B. Volume is a single byte 0..63.
-#include <Wire.h>
-#define MAX9744_I2C_ADDR 0x4B
-#define I2C_SDA_PIN 21
-#define I2C_SCL_PIN 22
-#define MAX9744_DEFAULT_VOLUME 40  // 0..63
-
-// Use a hardware UART on ESP32-S3 (SoftwareSerial not needed/recommended)
-HardwareSerial auxSerial(1);
-
-// ESP32 LEDC PWM configuration
-static const int PWM_FREQ_HZ = 5000;
-static const int PWM_RES_BITS = 8;  // 0..255
-static const int LEDC_CHANNEL_CH1 = 0;
-static const int LEDC_CHANNEL_CH2 = 1;
-
-// LEDC API compatibility:
-// - esp32 core v2.x: ledcSetup/ledcAttachPin/ledcWrite(channel, duty)
-// - esp32 core v3.x: ledcAttach(pin, freq, resolution) / ledcWrite(pin, duty)
-#include <esp_arduino_version.h>
-#include <math.h>
-
-// Audio mode (B1): sine tone on DAC with amplitude controlled by CH1.
-enum OutputMode : uint8_t { MODE_TACTILE = 0, MODE_AUDIO = 1 };
-volatile OutputMode g_mode = MODE_TACTILE;
-
-static const uint32_t AUDIO_SAMPLE_RATE_HZ = 8000;
-static const uint16_t SINE_TABLE_SIZE = 256;
-static uint8_t g_sine_table[SINE_TABLE_SIZE];
-volatile uint32_t g_phase = 0;
-volatile uint32_t g_phase_inc = 0;
-volatile uint8_t g_amp = 0;  // 0..255 envelope from CH1
-
-hw_timer_t *g_audio_timer = nullptr;
-portMUX_TYPE g_audio_timer_mux = portMUX_INITIALIZER_UNLOCKED;
-
-static inline void audioSetFreqHz(uint16_t hz) {
-  if (hz < 20) hz = 20;
-  if (hz > 2000) hz = 2000;
-  uint64_t inc = ((uint64_t)hz << 32) / (uint64_t)AUDIO_SAMPLE_RATE_HZ;
-  portENTER_CRITICAL(&g_audio_timer_mux);
-  g_phase_inc = (uint32_t)inc;
-  portEXIT_CRITICAL(&g_audio_timer_mux);
-}
-
-void IRAM_ATTR onAudioTimerISR() {
-  uint32_t phase = g_phase + g_phase_inc;
-  g_phase = phase;
-  uint8_t idx = (uint8_t)(phase >> 24);
-  uint8_t s = g_sine_table[idx];  // 0..255 centered at ~128
-  uint8_t a = g_amp;              // 0..255
-  int16_t centered = (int16_t)s - 128;
-  int16_t scaled = (int16_t)((centered * (int16_t)a) / 255);
-  uint8_t out = (uint8_t)(scaled + 128);
-  dacWrite(AUDIO_DAC_PIN, out);
-}
-
-static inline void audioStart() {
-  if (g_audio_timer != nullptr) return;
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  // Core v3.x timer API
-  // Configure timer to tick at sample rate, then alarm every tick.
-  g_audio_timer = timerBegin(AUDIO_SAMPLE_RATE_HZ);
-  timerAttachInterrupt(g_audio_timer, &onAudioTimerISR);
-  timerAlarm(g_audio_timer, 1, true, 0); // alarm_value=1 tick, autoreload, unlimited
-#else
-  // Core v2.x timer API
-  // 80MHz APB clock / 80 = 1MHz timer tick (1us)
-  g_audio_timer = timerBegin(0, 80, true);
-  timerAttachInterrupt(g_audio_timer, &onAudioTimerISR, true);
-  timerAlarmWrite(g_audio_timer, 1000000 / AUDIO_SAMPLE_RATE_HZ, true);
-  timerAlarmEnable(g_audio_timer);
-#endif
-}
-
-static inline void audioStop() {
-  if (g_audio_timer == nullptr) return;
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  timerStop(g_audio_timer);
-  timerDetachInterrupt(g_audio_timer);
-  timerEnd(g_audio_timer);
-#else
-  timerAlarmDisable(g_audio_timer);
-  timerDetachInterrupt(g_audio_timer);
-  timerEnd(g_audio_timer);
-#endif
-  g_audio_timer = nullptr;
-  dacWrite(AUDIO_DAC_PIN, 0);
-}
-
-static inline void pwmAttach(uint8_t pin, uint8_t channel) {
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  (void)channel;
-  ledcAttach(pin, PWM_FREQ_HZ, PWM_RES_BITS);
-#else
-  ledcSetup(channel, PWM_FREQ_HZ, PWM_RES_BITS);
-  ledcAttachPin(pin, channel);
-#endif
-}
-
-static inline void pwmWrite(uint8_t pin, uint8_t channel, int duty) {
-  duty = constrain(duty, PWM_MIN, PWM_MAX);
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  (void)channel;
-  ledcWrite(pin, duty);
-#else
-  (void)pin;
-  ledcWrite(channel, duty);
-#endif
-}
-
-static inline void max9744SetVolume(uint8_t vol) {
-  if (vol > 63) vol = 63;
-  Wire.beginTransmission(MAX9744_I2C_ADDR);
-  Wire.write(vol); // single byte command
-  Wire.endTransmission();
-}
+SoftwareSerial auxSerial(AUX_SERIAL_RX_PIN, AUX_SERIAL_TX_PIN);
 
 const int SERIAL_BUFFER_SIZE = 128;
 const unsigned long SERIAL_TIMEOUT_MS = 1000;  // Message timeout
@@ -152,13 +28,11 @@ struct InputChannelState {
   int currentPWM;
   bool hasPWMData;
   uint8_t outputPin;
-  uint8_t ledcChannel;
   const char* label;
 };
 
-// CH1 uses DAC (so ledcChannel is unused there)
-InputChannelState channel1 = {"", 0, false, false, 0, false, AUDIO_DAC_PIN, LEDC_CHANNEL_CH1, "CH1(USB->AUDIO)"};
-InputChannelState channel2 = {"", 0, false, false, 0, false, VIBRATION_MOTOR_PIN_CH2, LEDC_CHANNEL_CH2, "CH2(AUX->MOTOR)"};
+InputChannelState channel1 = {"", 0, false, false, 0, false, VIBRATION_MOTOR_PIN_CH1, "CH1(USB)"};
+InputChannelState channel2 = {"", 0, false, false, 0, false, VIBRATION_MOTOR_PIN_CH2, "CH2(AUX)"};
 
 // Function to map normalized value (0..1) to PWM value
 int mapValueToPWM(float value) {
@@ -207,62 +81,6 @@ void handleDualSerialValues(float value1, float value2, const String &timestamp)
 
 // Process Serial message
 void processSerialMessage(const String &message, InputChannelState &channel) {
-  // Mode command: "MODE,AUD" or "MODE,TAC"
-  if (message.startsWith("MODE,") || message.startsWith("MODE=")) {
-    int sep = message.indexOf(',');
-    if (sep < 0) sep = message.indexOf('=');
-    if (sep > 0 && sep < (int)message.length() - 1) {
-      String modeStr = message.substring(sep + 1);
-      modeStr.trim();
-      modeStr.toUpperCase();
-      if (modeStr == "AUD" || modeStr == "AUDIO") {
-        g_mode = MODE_AUDIO;
-        audioStart();
-        Serial.println("Mode set to AUDIO (tone on DAC, CH1=amplitude)");
-      } else if (modeStr == "TAC" || modeStr == "TACTILE") {
-        g_mode = MODE_TACTILE;
-        audioStop();
-        Serial.println("Mode set to TACTILE (DAC level follows CH1)");
-      }
-    }
-    return;
-  }
-
-  // Frequency command (Hz): "FREQ,120" or "FREQ=200"
-  if (message.startsWith("FREQ,") || message.startsWith("FREQ=")) {
-    int sep = message.indexOf(',');
-    if (sep < 0) sep = message.indexOf('=');
-    if (sep > 0 && sep < (int)message.length() - 1) {
-      String fStr = message.substring(sep + 1);
-      fStr.trim();
-      int hz = fStr.toInt();
-      if (fStr.length() > 0 && hz > 0) {
-        audioSetFreqHz((uint16_t)hz);
-        Serial.print("Tone frequency set to ");
-        Serial.print(hz);
-        Serial.println(" Hz");
-      }
-    }
-    return;
-  }
-
-  // Volume command (USB or AUX): "VOL,0..63" or "VOL=0..63"
-  if (message.startsWith("VOL,") || message.startsWith("VOL=")) {
-    int sep = message.indexOf(',');
-    if (sep < 0) sep = message.indexOf('=');
-    if (sep > 0 && sep < (int)message.length() - 1) {
-      String volStr = message.substring(sep + 1);
-      volStr.trim();
-      int vol = volStr.toInt();
-      if (volStr.length() > 0 && vol >= 0 && vol <= 63) {
-        max9744SetVolume((uint8_t)vol);
-        Serial.print("MAX9744 volume set to ");
-        Serial.println(vol);
-      }
-    }
-    return;
-  }
-
   int commaIndex = message.indexOf(',');
   
   if (commaIndex <= 0 || commaIndex >= message.length() - 1) {
@@ -381,24 +199,12 @@ void processSerialMessages(Stream &input, InputChannelState &channel) {
   // Check if we're still "receiving" (data within last 100ms)
   if (channel.serialReceivingData && (millis() - channel.lastSerialCharTime) > SERIAL_RECEIVING_TIMEOUT) {
     channel.serialReceivingData = false;
-    // Stop output when data stream becomes stale
-    channel.currentPWM = 0;
-    channel.hasPWMData = false;
   }
   
   // Timeout: clear buffer if no data received for a while
   if (channel.serialBuffer.length() > 0 && 
       (millis() - channel.lastSerialCharTime) > SERIAL_TIMEOUT_MS) {
     channel.serialBuffer = "";
-  }
-
-  // Consider channel disconnected after a longer silence
-  if (channel.serialConnected &&
-      (millis() - channel.lastSerialCharTime) > SERIAL_TIMEOUT_MS) {
-    channel.serialConnected = false;
-    channel.serialReceivingData = false;
-    channel.currentPWM = 0;
-    channel.hasPWMData = false;
   }
 }
 
@@ -416,56 +222,23 @@ bool isSerialReceiving(const InputChannelState &channel) {
 void updateVibrationMotor(const InputChannelState &channel) {
   if (channel.hasPWMData) {
     // We have PWM data - output it
-    // CH1 is AUDIO (DAC), CH2 is MOTOR (PWM)
-    if (channel.outputPin == AUDIO_DAC_PIN) {
-      g_amp = (uint8_t)channel.currentPWM;
-      if (g_mode == MODE_TACTILE) {
-        dacWrite(AUDIO_DAC_PIN, (uint8_t)channel.currentPWM);
-      }
-    } else {
-      pwmWrite(channel.outputPin, channel.ledcChannel, channel.currentPWM);
-    }
+    analogWrite(channel.outputPin, channel.currentPWM);
   } else {
     // No data yet - turn off motor
-    if (channel.outputPin == AUDIO_DAC_PIN) {
-      g_amp = 0;
-      if (g_mode == MODE_TACTILE) {
-        dacWrite(AUDIO_DAC_PIN, 0);
-      }
-    } else {
-      pwmWrite(channel.outputPin, channel.ledcChannel, 0);
-    }
+    analogWrite(channel.outputPin, 0);
   }
 }
 
 void setup() {
   // Initialize serial communication
   Serial.begin(SERIAL_BAUD_RATE);
-  auxSerial.begin(AUX_SERIAL_BAUD_RATE, SERIAL_8N1, AUX_SERIAL_RX_PIN, AUX_SERIAL_TX_PIN);
+  auxSerial.begin(AUX_SERIAL_BAUD_RATE);
   delay(1000);
-
-  // I2C for MAX9744 volume control
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  max9744SetVolume(MAX9744_DEFAULT_VOLUME);
-
-  // Build sine table once (256 samples)
-  for (int i = 0; i < (int)SINE_TABLE_SIZE; i++) {
-    float phase = (2.0f * (float)M_PI * (float)i) / (float)SINE_TABLE_SIZE;
-    float s = sinf(phase); // -1..1
-    int v = (int)(128.0f + 127.0f * s);
-    if (v < 0) v = 0;
-    if (v > 255) v = 255;
-    g_sine_table[i] = (uint8_t)v;
-  }
-  audioSetFreqHz(120); // default tone frequency
   
-  Serial.println("\nESP32 (LilyGO T-Display) Exciter + Motor Controller");
+  Serial.println("\nArduino Vibration Motor Controller");
   Serial.println("Supports:");
-  Serial.println("  CH1: USB Serial (value,timestamp) -> DAC GPIO 25 -> MAX9744 IN");
-  Serial.println("  CH2: AUX UART RX GPIO 27 (value,timestamp) -> PWM GPIO 32");
-  Serial.println("  Volume: send 'VOL,0..63' over USB/AUX");
-  Serial.println("  Mode: send 'MODE,AUD' (tone) or 'MODE,TAC' (level)");
-  Serial.println("  Tone: send 'FREQ,Hz' (e.g. FREQ,120)");
+  Serial.println("  CH1: USB Serial (value,timestamp) -> PWM pin 9");
+  Serial.println("  CH2: AUX SoftwareSerial RX pin 2 (value,timestamp) -> PWM pin 10");
   Serial.println("==========================================");
   
   // Reserve buffer space and reset channel states
@@ -480,16 +253,11 @@ void setup() {
   channel2.currentPWM = 0;
   channel2.hasPWMData = false;
   
-  // Initialize output pins
-  pinMode(AUDIO_DAC_PIN, OUTPUT);
+  // Initialize vibration motor pins
+  pinMode(VIBRATION_MOTOR_PIN_CH1, OUTPUT);
   pinMode(VIBRATION_MOTOR_PIN_CH2, OUTPUT);
-
-  // Configure LEDC PWM
-  pwmAttach(VIBRATION_MOTOR_PIN_CH2, LEDC_CHANNEL_CH2);
-
-  // Start with outputs off
-  dacWrite(AUDIO_DAC_PIN, 0);
-  pwmWrite(VIBRATION_MOTOR_PIN_CH2, LEDC_CHANNEL_CH2, 0);
+  analogWrite(VIBRATION_MOTOR_PIN_CH1, 0);  // Start with motor off
+  analogWrite(VIBRATION_MOTOR_PIN_CH2, 0);  // Start with motor off
 }
 
 void loop() {

@@ -271,17 +271,15 @@ class WaveformModel:
         # Clamp to valid range
         sample_index = max(0, min(sample_index, len(trace.data) - 1))
         
-        # Get raw value - handle masked arrays and NaN values.
-        # Avoid float(np.ma.masked) which emits warnings and can flood logs.
+        # Get raw value - handle masked arrays and NaN values
         try:
-            v = trace.data[sample_index]
-            if np.ma.is_masked(v):
-                return None
-            raw_value = float(v)
+            raw_value = float(trace.data[sample_index])
+            # Check for NaN or infinite values (can occur with masked arrays)
             if not np.isfinite(raw_value):
                 return None
             return raw_value
         except (ValueError, TypeError):
+            # Handle masked values or other conversion errors
             return None
     
     def get_normalized_value(self, timestamp: UTCDateTime) -> float:
@@ -313,15 +311,14 @@ class WaveformModel:
         # Clamp to valid range
         sample_index = max(0, min(sample_index, len(trace.data) - 1))
         
-        # Get raw value - handle masked arrays and NaN values (without warnings)
+        # Get raw value - handle masked arrays and NaN values
         try:
-            v = trace.data[sample_index]
-            if np.ma.is_masked(v):
-                return 0.0
-            raw_value = float(v)
+            raw_value = float(trace.data[sample_index])
+            # Check for NaN or infinite values (can occur with masked arrays)
             if not np.isfinite(raw_value):
                 return 0.0
         except (ValueError, TypeError):
+            # Handle masked values or other conversion errors
             return 0.0
         
         # Apply normalization
@@ -382,10 +379,7 @@ class WaveformModel:
         sample_index = max(0, min(sample_index, len(trace.data) - 1))
 
         try:
-            v = trace.data[sample_index]
-            if np.ma.is_masked(v):
-                return 0.0
-            raw_value = float(v)
+            raw_value = float(trace.data[sample_index])
             if not np.isfinite(raw_value):
                 return 0.0
         except (ValueError, TypeError):

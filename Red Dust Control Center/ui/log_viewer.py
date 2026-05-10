@@ -2,7 +2,7 @@
 Log Viewer widget for displaying system logs.
 """
 from PySide6.QtWidgets import QTextEdit
-from PySide6.QtCore import Qt, QObject, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QTextCharFormat, QColor
 import logging
 from datetime import datetime
@@ -17,9 +17,6 @@ class LogViewer(QTextEdit):
         self.setReadOnly(True)
         self.setFontFamily("Courier")
         self.setFontPointSize(9)
-
-        # Prevent unbounded growth (can slow/freeze UI over time)
-        self.document().setMaximumBlockCount(2000)
         
         # Color formats for different log levels
         self._formats = {
@@ -72,21 +69,13 @@ class LogHandler(logging.Handler):
         """
         super().__init__()
         self._log_viewer = log_viewer
-        # Qt widgets must only be touched from the UI thread.
-        # Use a queued signal so logs coming from worker threads are safe.
-        self._emitter = _LogEmitter()
-        self._emitter.log_line.connect(self._log_viewer.append_log, Qt.ConnectionType.QueuedConnection)
     
     def emit(self, record):
         """Emit log record to LogViewer."""
         try:
             level = record.levelname
             message = self.format(record)
-            self._emitter.log_line.emit(level, message)
+            self._log_viewer.append_log(level, message)
         except Exception:
             pass  # Ignore errors in logging
-
-
-class _LogEmitter(QObject):
-    log_line = Signal(str, str)
 
