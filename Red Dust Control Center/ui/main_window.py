@@ -672,9 +672,14 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
         needs_recreate = False
         
         if comm_type == 'OSC':
-            # Check if OSC-specific parameters changed
-            if hasattr(obj, 'host') and hasattr(obj, 'port'):
-                if obj.host != config.get('host') or obj.port != config.get('port'):
+            # Check if OSC-specific parameters changed (address must trigger recreate;
+            # OSCObject.address is only set at construction, not via update_object_remapping)
+            if hasattr(obj, 'address') and hasattr(obj, 'host') and hasattr(obj, 'port'):
+                if (
+                    obj.host != config.get('host')
+                    or obj.port != config.get('port')
+                    or obj.address != config.get('address')
+                ):
                     needs_recreate = True
         elif comm_type == 'Serial':
             # For Serial objects, check if port changed
