@@ -355,7 +355,29 @@ class OSCManager(QObject):
     def is_streaming(self) -> bool:
         """Check if streaming is active (global state)."""
         return self._streaming
-    
+
+    def shutdown(self) -> None:
+        """
+        Stop output timers, stop per-object streaming, and close all OSC/Serial
+        resources. Safe to call more than once.
+        """
+        logger.info("OSCManager: shutdown (stopping timers, closing all objects)")
+        self._osc_timer.stop()
+        self._serial_timer.stop()
+        try:
+            for name in list(self._objects.keys()):
+                try:
+                    self.remove_object(name)
+                except Exception as e:
+                    logger.warning("OSCManager: failed to remove object %s: %s", name, e)
+        finally:
+            self._osc_timer.stop()
+            self._serial_timer.stop()
+            if self._streaming:
+                self._streaming = False
+                self.streaming_state_changed.emit(False)
+            logger.info("OSCManager: shutdown complete")
+
     def _send_osc_frame(self) -> None:
         """Send one frame of data to all streaming OSC objects (called by OSC timer)."""
         if self._waveform_model is None or self._playback_controller is None:

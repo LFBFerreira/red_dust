@@ -115,9 +115,8 @@ class SessionManager:
                     'station': trace.stats.station,
                 }
         
-        # Active channel
         if waveform_model:
-            state['active_channel'] = waveform_model.get_active_channel()
+            state['selected_channels'] = waveform_model.get_selected_channels()
             
             # Scaling settings
             # Note: We don't store the percentile values directly, but we could

@@ -5,9 +5,11 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QLabel, QTextEdit, QComboBox, QPushButton, QSplitter,
                                QMenuBar, QFileDialog, QMessageBox)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtGui import QCloseEvent
 from pathlib import Path
 from obspy import UTCDateTime
 import logging
+from typing import Optional
 
 from core.data_manager import DataManager
 from core.waveform_model import WaveformModel
@@ -23,6 +25,10 @@ from ui.log_viewer import LogViewer, LogHandler
 from settings import LEFT_PANEL_WIDTH, WAVEFORM_VIEWER_DEFAULT_WIDTH, SERIAL_BAUDRATE
 
 logger = logging.getLogger(__name__)
+
+_LOG_TAG = "[multi_ch]"
+_WARN_NO_CHANNELS_TITLE = "Playback"
+_WARN_NO_CHANNELS_MSG = "At least one channel must be selected!"
 
 
 class DataLoadThread(QThread):
@@ -120,7 +126,24 @@ class MainWindow(QMainWindow):
         self._load_metadata_async()
         
         logger.info("Red Dust Control Center initialized")
-    
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Ensure playback, OSC, and Serial are stopped before exit."""
+        logger.info("Application close: cleaning up playback and I/O...")
+        try:
+            if getattr(self, "playback_controller", None):
+                self.playback_controller.stop()
+            if getattr(self, "osc_manager", None):
+                self.osc_manager.shutdown()
+        except Exception as e:
+            logger.warning("Error during application cleanup: %s", e, exc_info=True)
+        mt = getattr(self, "metadata_thread", None)
+        if mt is not None and mt.isRunning():
+            mt.wait(2000)
+        if self.load_thread is not None and self.load_thread.isRunning():
+            self.load_thread.wait(2000)
+        event.accept()
+
     def _setup_menu_bar(self):
         """Set up the menu bar with File and About menus."""
         menubar = self.menuBar()
@@ -304,13 +327,17 @@ class MainWindow(QMainWindow):
         self.data_picker.load_requested.connect(self._on_load_requested)
         
         # Playback controls
-        self.playback_controls.play_clicked.connect(self.playback_controller.start)
+        self.playback_controls.play_clicked.connect(self._on_play_requested)
         self.playback_controls.pause_clicked.connect(self.playback_controller.pause)
         self.playback_controls.stop_clicked.connect(self.playback_controller.stop)
         self.playback_controls.speed_changed.connect(self.playback_controller.set_speed)
         self.playback_controls.loop_toggled.connect(self.playback_controller.enable_loop)
-        self.playback_controls.channel_changed.connect(self._on_active_channel_changed)
-        self.playback_controls.position_slider.valueChanged.connect(self._on_position_slider_changed)
+        self.playback_controls.channels_selection_changed.connect(
+            self._on_channels_selection_changed
+        )
+        self.playback_controls.position_slider.valueChanged.connect(
+            self._on_position_slider_changed
+        )
         
         # Playback controller updates
         self.playback_controller.playhead_updated.connect(self._on_playhead_updated)
@@ -429,19 +456,13 @@ class MainWindow(QMainWindow):
         channels = self.waveform_model.get_all_channels()
         logger.info(f"Found {len(channels)} channels: {channels}")
         self.playback_controls.set_channels(channels)
-        
-        # Set active channel
-        active_channel = self.waveform_model.get_active_channel()
-        logger.info(f"Active channel: {active_channel}")
-        if active_channel:
-            self.playback_controls.set_active_channel(active_channel)
-            # Update object cards with active channel
-            self._update_object_card_channels()
-        
-        # Update waveform viewer
+        selected = self.waveform_model.get_selected_channels()
+        self.playback_controls.set_selected_channels(selected)
+        self._update_object_card_channels()
+
         logger.info(f"Updating waveform viewer...")
         viewer_start = time.time()
-        self.waveform_viewer.update_waveform(stream, active_channel)
+        self.waveform_viewer.update_waveform(stream, selected)
         viewer_time = time.time() - viewer_start
         logger.info(f"Waveform viewer updated in {viewer_time:.2f}s")
         
@@ -461,9 +482,7 @@ class MainWindow(QMainWindow):
         time_range = self.waveform_model.get_time_range()
         if time_range:
             initial_time = time_range[0]
-            raw_value = self.waveform_model.get_raw_value(initial_time)
-            normalized_value = self.waveform_model.get_normalized_value(initial_time)
-            self.playback_controls.update_value_display(raw_value, normalized_value)
+            self._refresh_value_display(initial_time)
             # Initialize position slider
             self.playback_controls.update_position_slider(initial_time, time_range[0], time_range[1])
         
@@ -472,7 +491,13 @@ class MainWindow(QMainWindow):
             logger.info(f"Restoring pending session state...")
             self._restore_session_state_after_load(self.pending_session_state)
             self.pending_session_state = None
-        
+
+        logger.debug(
+            "%s _on_data_loaded done selected=%s ref=%s",
+            _LOG_TAG,
+            len(self.waveform_model.get_selected_channels()),
+            self.waveform_model.get_active_channel(),
+        )
         process_time = time.time() - process_start
         logger.info(f"===== Data loaded callback complete in {process_time:.2f}s =====")
     
@@ -489,16 +514,22 @@ class MainWindow(QMainWindow):
         
         stream = self.waveform_model.get_stream()
         if len(stream) == 0:
+            self.metadata_text.clear()
             return
-        
+
         trace = stream[0]
         active_channel = self.waveform_model.get_active_channel()
+        selected = self.waveform_model.get_selected_channels()
+        selected_line = ", ".join(selected) if selected else "—"
         channel_info = self.waveform_model.get_channel_info(active_channel)
-        
+        sr = self.waveform_model.get_sample_rate()
+        sr_line = f"{sr:.2f} Hz" if sr is not None else "--"
+
         metadata = f"""Network: {trace.stats.network}
 Station: {trace.stats.station}
-Active Channel: {active_channel}
-Sample Rate: {self.waveform_model.get_sample_rate():.2f} Hz"""
+Reference Channel: {active_channel or '—'}
+Selected channels: {selected_line}
+Sample Rate: {sr_line}"""
         
         if channel_info:
             time_range = self.waveform_model.get_time_range()
@@ -508,7 +539,26 @@ Time Range: {time_range[0]} to {time_range[1]}
 Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
         
         self.metadata_text.setText(metadata)
-    
+
+    def _refresh_value_display(self, timestamp: Optional[UTCDateTime] = None) -> None:
+        """Refresh raw/normalized value label for current (or given) playhead time."""
+        if not self.waveform_model.get_selected_channels():
+            self.playback_controls.update_value_display([])
+            return
+        ts = timestamp
+        if ts is None:
+            ts = self.playback_controller.get_current_timestamp()
+        if ts is None:
+            tr = self.waveform_model.get_time_range()
+            if tr is not None:
+                ts = tr[0]
+        if ts is None:
+            self.playback_controls.update_value_display([])
+            return
+        self.playback_controls.update_value_display(
+            self.waveform_model.get_selected_channel_value_pairs(ts)
+        )
+
     def _on_playhead_updated(self, timestamp):
         """Handle playhead position update."""
         self.waveform_viewer.update_playhead(timestamp)
@@ -516,21 +566,55 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
         # Update time display
         time_range = self.waveform_model.get_time_range()
         if time_range:
-            self.playback_controls.update_time_display(timestamp, time_range[1])
+            self.playback_controls.update_time_display(
+                timestamp, time_range[0], time_range[1]
+            )
             # Update position slider
             self.playback_controls.update_position_slider(timestamp, time_range[0], time_range[1])
         
-        # Update value display (raw and normalized)
-        raw_value = self.waveform_model.get_raw_value(timestamp)
-        normalized_value = self.waveform_model.get_normalized_value(timestamp)
-        self.playback_controls.update_value_display(raw_value, normalized_value)
-    
+        self._refresh_value_display(timestamp)
+
+    def _on_play_requested(self) -> None:
+        if not self.waveform_model.get_selected_channels():
+            QMessageBox.warning(
+                self, _WARN_NO_CHANNELS_TITLE, _WARN_NO_CHANNELS_MSG
+            )
+            return
+        self.playback_controller.start()
+
+    def _on_channels_selection_changed(self, selected: list) -> None:
+        logger.debug(
+            "%s _on_channels_selection_changed n=%s",
+            _LOG_TAG,
+            len(selected),
+        )
+        self.waveform_model.set_selected_channels(selected)
+        stream = self.waveform_model.get_stream()
+        if stream:
+            self.waveform_viewer.update_waveform(stream, selected)
+        if not selected:
+            self.playback_controller.stop()
+        self._update_metadata()
+        self._update_object_card_channels()
+        self._refresh_value_display()
+
     def _on_position_slider_changed(self, value: int) -> None:
         """Handle position slider change."""
         # Ignore if slider is being updated programmatically
         if self.playback_controls._position_slider_updating:
             return
-        
+
+        if not self.waveform_model.get_selected_channels():
+            QMessageBox.warning(
+                self, _WARN_NO_CHANNELS_TITLE, _WARN_NO_CHANNELS_MSG
+            )
+            self.playback_controls._position_slider_updating = True
+            self.playback_controls.position_slider.blockSignals(True)
+            self.playback_controls.position_slider.setValue(0)
+            self.playback_controls.position_slider.blockSignals(False)
+            self.playback_controls._position_slider_updating = False
+            return
+
         # Get time range
         time_range = self.waveform_model.get_time_range()
         if not time_range:
@@ -787,11 +871,10 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
         logger.debug(f"Object {name} connection: {'connected' if connected else 'disconnected'}")
     
     def _update_object_card_channels(self):
-        """Update active channel for all object cards."""
+        """Update reference channel coloring for all object cards."""
         active_channel = self.waveform_model.get_active_channel()
-        if active_channel:
-            for card in self.object_cards._cards.values():
-                card.set_active_channel(active_channel)
+        for card in self.object_cards._cards.values():
+            card.set_active_channel(active_channel)
     
     def _on_card_streaming_started(self, name: str):
         """Handle card start button clicked."""
@@ -800,26 +883,6 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
     def _on_card_streaming_stopped(self, name: str):
         """Handle card stop button clicked."""
         self.osc_manager.stop_object_streaming(name)
-    
-    def _on_active_channel_changed(self, channel: str):
-        """Handle active channel selection change."""
-        if channel:
-            self.waveform_model.set_active_channel(channel)
-            stream = self.waveform_model.get_stream()
-            if stream:
-                self.waveform_viewer.update_waveform(stream, channel)
-            self._update_metadata()
-            logger.info(f"Active channel changed to: {channel}")
-            
-            # Update object cards with new active channel
-            self._update_object_card_channels()
-            
-            # Update value display for new channel
-            current_time = self.playback_controller.get_current_timestamp()
-            if current_time:
-                raw_value = self.waveform_model.get_raw_value(current_time)
-                normalized_value = self.waveform_model.get_normalized_value(current_time)
-                self.playback_controls.update_value_display(raw_value, normalized_value)
     
     def _load_metadata_async(self):
         """Load metadata (available years/days) in background."""
@@ -1065,20 +1128,29 @@ Duration: {(time_range[1] - time_range[0]) / 3600:.2f} hours"""
     
     def _restore_session_state_after_load(self, state: dict):
         """Restore session state that depends on data being loaded."""
-        # Restore active channel
-        if 'active_channel' in state and state['active_channel']:
-            active_channel = state['active_channel']
-            logger.info(f"Restoring active channel: {active_channel}")
-            if self.waveform_model:
-                self.waveform_model.set_active_channel(active_channel)
+        if "selected_channels" in state and self.waveform_model:
+            raw_sel = state["selected_channels"]
+            if not isinstance(raw_sel, list):
+                raw_sel = []
+            self.waveform_model.set_selected_channels(raw_sel)
+            sel = self.waveform_model.get_selected_channels()
             if self.playback_controls:
-                self.playback_controls.set_active_channel(active_channel)
+                self.playback_controls.set_selected_channels(sel)
             if self.waveform_viewer:
                 stream = self.waveform_model.get_stream()
                 if stream:
-                    self.waveform_viewer.update_waveform(stream, active_channel)
+                    self.waveform_viewer.update_waveform(stream, sel)
+            if not sel:
+                self.playback_controller.stop()
             self._update_metadata()
-        
+            self._update_object_card_channels()
+            tr = self.waveform_model.get_time_range()
+            ct = self.playback_controller.get_current_timestamp()
+            if tr and ct is not None:
+                self.playback_controls.update_position_slider(ct, tr[0], tr[1])
+                self.playback_controls.update_time_display(ct, tr[0], tr[1])
+            self._refresh_value_display()
+
         # Restore playback settings
         if 'playback' in state:
             playback_state = state['playback']

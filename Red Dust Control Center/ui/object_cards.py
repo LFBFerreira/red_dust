@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QPalette
 import logging
+from typing import Optional
 from settings import STREAMING_PORT, SERIAL_BAUDRATE, INTERACTIVE_OBJECTS_HEIGHT, OBJECT_CARD_WIDTH
 
 logger = logging.getLogger(__name__)
@@ -440,18 +441,12 @@ class ObjectCard(QFrame):
             # Emit config changed to trigger reconnection attempt
             self.config_changed.emit(self._name)
     
-    def set_active_channel(self, channel: str) -> None:
+    def set_active_channel(self, channel: Optional[str]) -> None:
         """
-        Set the active channel for this object card.
-        The progress bar color will be based on the channel.
-        
-        Args:
-            channel: Active channel identifier (e.g., "03.BHU")
+        Set the reference channel for progress bar coloring, or None for neutral grey.
         """
         self._active_channel = channel
-        # Update progress bar color immediately if we have a color for this channel
-        if channel in self._channel_colors:
-            self._update_progress_bar_color()
+        self._update_progress_bar_color()
     
     def _get_channel_color(self, channel: str) -> str:
         """
