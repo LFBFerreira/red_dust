@@ -1,0 +1,19 @@
+{
+  "folders": [
+    { "path": "Red Dust Control Center", "name": "rdcc" },
+    { "path": ".", "name": "repo" }
+  ],
+  "settings": {
+    "python.languageServer": "Pylance",
+    "python.defaultInterpreterPath": "${workspaceFolder:rdcc}/.venv/bin/python3",
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.env.osx": {
+      "VIRTUAL_ENV": "${workspaceFolder:rdcc}/.venv",
+      "PATH": "${workspaceFolder:rdcc}/.venv/bin:${env:PATH}"
+    },
+    "terminal.integrated.env.linux": {
+      "VIRTUAL_ENV": "${workspaceFolder:rdcc}/.venv",
+      "PATH": "${workspaceFolder:rdcc}/.venv/bin:${env:PATH}"
+    }
+  }
+}

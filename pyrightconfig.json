@@ -1,0 +1,6 @@
+{
+  "include": ["Red Dust Control Center"],
+  "venvPath": "Red Dust Control Center",
+  "venv": ".venv",
+  "executionEnvironments": [{ "root": "Red Dust Control Center" }]
+}

@@ -1,0 +1,31 @@
+{
+  "folders": [
+    { "path": "Red Dust Control Center", "name": "rdcc" },
+    { "path": ".", "name": "repo" }
+  ],
+  "settings": {
+    "python.languageServer": "None",
+    "python.defaultInterpreterPath": "${workspaceFolder:rdcc}${/}.venv${/}Scripts${/}python.exe",
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.profiles.windows": {
+      "PowerShell": {
+        "source": "PowerShell",
+        "icon": "terminal-powershell",
+        "args": ["-ExecutionPolicy", "Bypass"]
+      }
+    },
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "terminal.integrated.env.windows": {
+      "VIRTUAL_ENV": "${workspaceFolder:rdcc}${/}.venv",
+      "PATH": "${workspaceFolder:rdcc}${/}.venv${/}Scripts;${env:PATH}"
+    },
+    "terminal.integrated.env.osx": {
+      "VIRTUAL_ENV": "${workspaceFolder:rdcc}/.venv",
+      "PATH": "${workspaceFolder:rdcc}/.venv/bin:${env:PATH}"
+    },
+    "terminal.integrated.env.linux": {
+      "VIRTUAL_ENV": "${workspaceFolder:rdcc}/.venv",
+      "PATH": "${workspaceFolder:rdcc}/.venv/bin:${env:PATH}"
+    }
+  }
+}

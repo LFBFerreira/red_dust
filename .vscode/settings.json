@@ -1,0 +1,25 @@
+{
+  "python.languageServer": "None",
+  "python.defaultInterpreterPath": "${workspaceFolder}${/}Red Dust Control Center${/}.venv${/}Scripts${/}python.exe",
+  "python.terminal.activateEnvironment": true,
+  "terminal.integrated.profiles.windows": {
+    "PowerShell": {
+      "source": "PowerShell",
+      "icon": "terminal-powershell",
+      "args": ["-ExecutionPolicy", "Bypass"]
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "terminal.integrated.env.windows": {
+    "VIRTUAL_ENV": "${workspaceFolder}${/}Red Dust Control Center${/}.venv",
+    "PATH": "${workspaceFolder}${/}Red Dust Control Center${/}.venv${/}Scripts;${env:PATH}"
+  },
+  "terminal.integrated.env.osx": {
+    "VIRTUAL_ENV": "${workspaceFolder}/Red Dust Control Center/.venv",
+    "PATH": "${workspaceFolder}/Red Dust Control Center/.venv/bin:${env:PATH}"
+  },
+  "terminal.integrated.env.linux": {
+    "VIRTUAL_ENV": "${workspaceFolder}/Red Dust Control Center/.venv",
+    "PATH": "${workspaceFolder}/Red Dust Control Center/.venv/bin:${env:PATH}"
+  }
+}
