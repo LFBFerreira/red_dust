@@ -1,17 +1,17 @@
 // Configuration settings for Lilygo Vibration Controller
 // This file contains all user-configurable constants
 
+// Multi-pin output (must match RDCC Pin_A.. order; max 5 slots)
+#define MAX_PINS 5
+// GPIO order: Pin_A, Pin_B, Pin_C, Pin_D, Pin_E (PWM-capable pins on typical TTGO T-Display)
+static const int OUTPUT_PINS[MAX_PINS] = {25, 26, 27, 32, 33};
+
 // Serial communication configuration
 #define SERIAL_BAUDRATE 115200  // Serial communication baud rate
 
-// OSC configuration
-const char* OSC_PATH = "/red_dust/osc_object_1";  // OSC path to listen for
+// OSC configuration — base path; payload is N floats (Pin_A..) + timestamp string
+const char* OSC_PATH = "/red_dust/osc_object_1";
 #define OSC_PORT 8000  // UDP port for OSC messages
-
-// Configuration constants
-#define VIBRATION_MOTOR_PIN 25  // PWM pin for vibration motor (GPIO 25 - safe for ESP32)
-// Note: Avoid pins 0, 2, 4, 12-15, 25-27 if using display
-// GPIO 25 is typically safe for PWM on TTGO T-Display
 
 // PWM mapping configuration
 #define PWM_MIN 0      // Minimum PWM value (motor off)
@@ -24,4 +24,4 @@ const char* OSC_PATH = "/red_dust/osc_object_1";  // OSC path to listen for
 // Graph display colors (RGB565 format)
 // Note: These will be used after TFT_eSPI is included, so TFT color constants are available
 #define GRAPH_GRID_COLOR TFT_BLUE   // Color for graph grid lines
-#define GRAPH_TRACE_COLOR TFT_RED   // Color for graph trace line
+#define GRAPH_TRACE_COLOR TFT_RED   // Legacy single-trace color (Pin_A uses first overlay color in .ino)

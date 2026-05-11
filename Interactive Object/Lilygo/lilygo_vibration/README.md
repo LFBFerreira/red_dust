@@ -107,9 +107,24 @@ Arduino IDE includes a specific board definition for the LilyGo T-Display, which
 
 ## How It Works
 
-This project controls a vibration motor based on data received from a computer or another device. Think of it like a volume control for vibration - when you send a number between 0 and 1 (where 0 means no vibration and 1 means maximum vibration), the device converts that number into a vibration intensity. 
+This firmware drives **up to five PWM outputs** (Pin_A through Pin_E) from **Red Dust Control Center** (RDCC) or compatible senders over **USB Serial** and/or **OSC**.
 
-The device listens for messages sent over the USB connection in a simple format: a number followed by a timestamp. When it receives a message, it immediately adjusts the vibration motor's strength to match that number. For example, if you send 0.5, the motor will vibrate at half intensity. If you send 0, it stops vibrating completely. The device continuously updates the vibration in real-time as new messages arrive, creating a responsive haptic feedback system.
+### Serial frame (variable pin count)
+
+- Format: `v1[,v2,...,vN],timestamp\n`
+- The **last** comma separates the **timestamp** (string) from all numeric fields.
+- Values are applied in order to **Pin_A …** up to **N**, capped at **5**; missing pins are set to **0**.
+- Each value is **clamped to 0..1** before mapping to PWM (0–255 by default).
+
+### OSC frame (variable pin count)
+
+- Listens on **UDP** `OSC_PORT` for messages whose **path** matches `OSC_PATH` (base address).
+- **Typetag**: `,f...fs` — one or more floats (big-endian), then one OSC **string** (timestamp). RDCC sends the same ordering as Serial.
+- If the sender sends more than five floats, only the first five are used; extra floats are skipped on the wire when decoding.
+
+### Display
+
+- The on-board graph shows **all pins overlaid** (each pin its own trace color), advancing one X step per received frame.
 
 ## Configuration
 
@@ -125,7 +140,8 @@ The `settings.h` file allows you to configure the most important settings for th
   - `OSC_PORT`: UDP port for OSC messages (default: 8000)
 
 - **Hardware Configuration:**
-  - `VIBRATION_MOTOR_PIN`: GPIO pin for the vibration motor (default: 25)
+  - `MAX_PINS`: Maximum outputs (default: 5)
+  - `OUTPUT_PINS[]`: GPIO order Pin_A..Pin_E (default: 25, 26, 27, 32, 33)
 
 - **PWM Settings:**
   - `PWM_MIN`: Minimum PWM value - motor off (default: 0)
