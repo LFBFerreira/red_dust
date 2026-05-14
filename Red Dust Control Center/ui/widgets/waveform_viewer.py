@@ -13,12 +13,59 @@ from pyqtgraph import AxisItem
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from settings import MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL
+
 from .channel_colors import FALLBACK_TRACE_COLOR, channel_color_map
 
 logger = logging.getLogger(__name__)
 
 _LOG_TAG = "[multi_ch]"
 CHANNEL_LINE_WIDTH = 1
+
+
+def _downsample_for_plot(
+    times: np.ndarray, data: np.ndarray, max_points: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Reduce point count for drawing only using min/max per time bin (preserves spikes).
+
+    Does not modify input arrays. Full-resolution data remains in the stream / precalc cache.
+    """
+    n = int(data.shape[0])
+    if max_points < 4 or n <= max_points:
+        return times, data
+
+    n_bins = max(1, max_points // 2)
+    edges = (np.arange(n_bins + 1, dtype=np.int64) * n // n_bins)
+    edges[-1] = n
+
+    idx_list: list[int] = []
+    for b in range(n_bins):
+        lo = int(edges[b])
+        hi = int(edges[b + 1])
+        if hi <= lo:
+            continue
+        if hi - lo == 1:
+            idx_list.append(lo)
+            continue
+        chunk = data[lo:hi]
+        if not np.any(np.isfinite(chunk)):
+            continue
+        rel_min = int(np.nanargmin(chunk))
+        rel_max = int(np.nanargmax(chunk))
+        i0 = lo + rel_min
+        i1 = lo + rel_max
+        if i0 == i1:
+            idx_list.append(i0)
+        elif i0 < i1:
+            idx_list.extend((i0, i1))
+        else:
+            idx_list.extend((i1, i0))
+
+    if not idx_list:
+        return times, data
+
+    idx = np.asarray(idx_list, dtype=np.int64)
+    return times[idx], data[idx]
 
 
 def _log_rss_note(where: str) -> None:
@@ -219,20 +266,36 @@ class WaveformViewer(QWidget):
         total_points = 0
         plot_t0 = time.time()
 
+        max_plot = MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL
         for channel_id in visible_list:
             channel_data = self._channel_data_cache[channel_id]
-            times = channel_data["times_full"]
-            data = channel_data["data_full"]
+            times_full = channel_data["times_full"]
+            data_full = channel_data["data_full"]
             npts = channel_data["npts_original"]
-            total_points += npts
+            times_plot, data_plot = _downsample_for_plot(
+                times_full, data_full, max_plot
+            )
+            total_points += int(times_plot.shape[0])
             color = colors_by_channel.get(channel_id, FALLBACK_TRACE_COLOR)
             plot_item = self.plot_widget.plot(
-                times, data, pen=pg.mkPen(color=color, width=CHANNEL_LINE_WIDTH)
+                times_plot,
+                data_plot,
+                pen=pg.mkPen(color=color, width=CHANNEL_LINE_WIDTH),
             )
             self._plot_items[channel_id] = plot_item
-            logger.debug(
-                "%s plotted %s npts=%s", _LOG_TAG, channel_id, f"{npts:,}"
-            )
+            plot_n = int(times_plot.shape[0])
+            if plot_n < npts:
+                logger.debug(
+                    "%s plotted %s npts=%s (display %s)",
+                    _LOG_TAG,
+                    channel_id,
+                    f"{npts:,}",
+                    f"{plot_n:,}",
+                )
+            else:
+                logger.debug(
+                    "%s plotted %s npts=%s", _LOG_TAG, channel_id, f"{npts:,}"
+                )
 
         logger.info(
             "%s plotted %s channels total_pts=%s in %.2fs",

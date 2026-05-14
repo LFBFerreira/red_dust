@@ -28,14 +28,16 @@ MAX_SELECTED_CHANNELS = 20
 
 LEFT_PANEL_WIDTH = 250  # Dataset Information and Data Picker panels (pixels)
 WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default waveform viewer width (pixels)
+# Cap points sent to pyqtgraph per channel (display only; stream / cache stay full rate).
+MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL = 8000
 
 
 # --- UI: interactive object cards ---
 
 INTERACTIVE_OBJECTS_HEIGHT = 300  # Tab panel height for interactive objects (pixels)
-TAB_ICON_SIZE = 16  # Streaming status icon in object tabs (pixels)
+TAB_ICON_SIZE = 20  # Streaming status icon in object tabs (pixels)
 OBJECT_CARD_LEFT_PANEL_MAX_WIDTH = 300  # OSC/Serial name & connection column (pixels)
-OSC_OBJECT_ENDPOINT_DEBOUNCE_MS = 450  # Apply OSC host/address after typing pauses (avoids DNS per key)
+OSC_OBJECT_ENDPOINT_DEBOUNCE_MS = 500  # Apply OSC host/address after typing pauses (avoids DNS per key)
 
 # --- Multi-pin streaming (firmware / protocol contract) ---
 
