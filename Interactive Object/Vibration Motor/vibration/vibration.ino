@@ -1,3 +1,7 @@
+// Serial wire format matches RDCC: v1,v2,...,vN,timestamp (last comma = timestamp).
+// Values in [0, 1] are live levels; outside that range = inactive/padding (motor off).
+// This board drives one motor from Pin_A only (first float v1).
+
 // Configuration constants
 #define VIBRATION_MOTOR_PIN 9  // PWM pin for vibration motor (change as needed)
 
@@ -31,61 +35,60 @@ int mapValueToPWM(float value) {
   return constrain(pwmValue, PWM_MIN, PWM_MAX);
 }
 
-// Handle Serial value (normalized 0..1)
-void handleSerialValue(float value, String timestamp) {
-  // Validate value is a valid number (not NaN or infinity)
+// Handle Pin_A wire value (first float in bundle). Inactive if outside [0, 1].
+void handleSerialValue(float value, const String& /*timestamp*/) {
   if (isnan(value) || isinf(value)) {
     Serial.println("Error: Invalid value (NaN or infinity), ignoring");
     return;
   }
-  
-  // Clamp value to 0..1 range
-  value = constrain(value, 0.0, 1.0);
-  
-  // Map value to PWM
+
+  serialReceivingData = true;
+  lastSerialCharTime = millis();
+
+  if (value < 0.0f || value > 1.0f) {
+    currentPWM = 0;
+    hasPWMData = true;
+    Serial.printf("Serial: inactive/padding value=%.6f -> PWM off\n", value);
+    return;
+  }
+
+  value = constrain(value, 0.0f, 1.0f);
   int pwmValue = mapValueToPWM(value);
   currentPWM = pwmValue;
   hasPWMData = true;
-  serialReceivingData = true;  // Mark as currently receiving
-  lastSerialCharTime = millis();  // Update timestamp
-  
+
   Serial.printf("Received Serial: value=%.6f, PWM=%d\n", value, pwmValue);
 }
 
-// Process Serial message
-void processSerialMessage(String message) {
-  int commaIndex = message.indexOf(',');
-  
-  if (commaIndex <= 0 || commaIndex >= message.length() - 1) {
-    // Invalid message format
+// Process Serial message: ... ,timestamp (last comma). First value token = Pin_A.
+void processSerialMessage(const String& message) {
+  int lastComma = message.lastIndexOf(',');
+  if (lastComma <= 0 || lastComma >= (int)message.length() - 1) {
     return;
   }
-  
-  String valueStr = message.substring(0, commaIndex);
-  String timestamp = message.substring(commaIndex + 1);
-  
-  // Trim whitespace from value string
+
+  String timestamp = message.substring(lastComma + 1);
+  timestamp.trim();
+  if (timestamp.length() == 0) {
+    return;
+  }
+
+  String valuesPart = message.substring(0, lastComma);
+  valuesPart.trim();
+  if (valuesPart.length() == 0) {
+    return;
+  }
+
+  int firstInnerComma = valuesPart.indexOf(',');
+  String valueStr =
+      (firstInnerComma < 0) ? valuesPart : valuesPart.substring(0, firstInnerComma);
   valueStr.trim();
-  
-  // Check if value string is empty
   if (valueStr.length() == 0) {
     return;
   }
-  
-  // Convert to float
+
   float value = valueStr.toFloat();
-  
-  // Check if conversion was successful
-  // (toFloat() returns 0.0 on error, so validate the string)
-  // Also check if the value is reasonable (within -1000 to 1000 range to catch parsing errors)
-  if (valueStr.length() > 0 && 
-      (valueStr.indexOf('.') >= 0 || valueStr.toInt() != 0 || valueStr == "0" || valueStr == "0.0") &&
-      value >= -1000.0 && value <= 1000.0) {
-    // Value will be clamped to 0..1 in handleSerialValue
-    handleSerialValue(value, timestamp);
-  } else {
-    Serial.printf("Error: Invalid serial value format: '%s'\n", valueStr.c_str());
-  }
+  handleSerialValue(value, timestamp);
 }
 
 // Process incoming Serial messages
@@ -185,7 +188,7 @@ void setup() {
   delay(1000);
   
   Serial.println("\nArduino Vibration Motor Controller");
-  Serial.println("Supports: Serial (value,timestamp format)");
+  Serial.println("Serial: v1[,v2,...],timestamp — uses v1 (Pin_A); [0,1]=live, else off");
   Serial.println("==========================================");
   
   // Reserve buffer space

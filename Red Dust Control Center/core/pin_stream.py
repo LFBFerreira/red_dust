@@ -10,7 +10,7 @@ from settings import MAX_PIN_SLOTS, PIN_SLOT_LABELS
 
 @dataclass(frozen=True)
 class PinStreamRow:
-    """One waveform channel mapped to a pin slot (wire order = list order)."""
+    """One waveform channel mapped to a physical pin slot (wire index ``slot_index``)."""
 
     row_id: str
     channel_id: str
@@ -35,12 +35,19 @@ def remap_normalized(normalized_01: float, lo: float, hi: float) -> float:
 def filter_pin_rows_by_channels(
     rows: List[PinStreamRow], allowed_channel_ids: AbstractSet[str]
 ) -> List[PinStreamRow]:
-    """Keep only rows whose ``channel_id`` is in ``allowed_channel_ids``; renumber ``slot_index``."""
+    """Keep only rows whose ``channel_id`` is in ``allowed_channel_ids``; preserve ``slot_index``."""
     kept = [r for r in rows if r.channel_id in allowed_channel_ids]
     return [
-        PinStreamRow(r.row_id, r.channel_id, r.remap_min, r.remap_max, i)
-        for i, r in enumerate(kept[:MAX_PIN_SLOTS])
+        PinStreamRow(r.row_id, r.channel_id, r.remap_min, r.remap_max, r.slot_index)
+        for r in kept[:MAX_PIN_SLOTS]
     ]
+
+
+def wire_bundle_width(rows: List[PinStreamRow]) -> int:
+    """Number of floats on the wire: ``max(slot_index)+1``, capped (empty → 0)."""
+    if not rows:
+        return 0
+    return min(MAX_PIN_SLOTS, max(int(r.slot_index) for r in rows) + 1)
 
 
 def pin_rows_from_dicts(rows: List[Dict[str, Any]]) -> List[PinStreamRow]:

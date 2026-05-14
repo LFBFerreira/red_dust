@@ -42,6 +42,8 @@ OSC_OBJECT_ENDPOINT_DEBOUNCE_MS = 450  # Apply OSC host/address after typing pau
 MAX_PIN_SLOTS = 5
 # Wire order: index 0 = first float in OSC/Serial frame (Pin_A), etc.
 PIN_SLOT_LABELS = ("Pin_A", "Pin_B", "Pin_C", "Pin_D", "Pin_E")
+# Slots with no mapped channel send this float; firmware treats values outside [0, 1] as inactive.
+WIRE_INACTIVE_PIN_SENTINEL = -1.0
 
 
 # --- OSC streaming ---

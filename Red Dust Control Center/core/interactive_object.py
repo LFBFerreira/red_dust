@@ -2,11 +2,16 @@
 Abstract base class for interactive objects supporting different communication protocols.
 
 Multi-pin streaming: each object has an ordered list of PinStreamRow entries.
-Per tick, normalized values (0..1) per waveform channel are remapped and sent as
-N floats (Pin_A .. in row order) plus one ISO8601 UTC timestamp string.
+Per tick, normalized values (0..1) are remapped (clamped to [0, 1] on the wire)
+as one float per physical pin slot (indices 0..N-1 = Pin_A..). Unassigned slots
+send ``settings.WIRE_INACTIVE_PIN_SENTINEL`` (outside [0, 1]); firmware ignores those.
+Plus one ISO8601 UTC timestamp string.
 
 Firmware contract: OSC message at base address, typetag (f * N)(s); Serial line
 v1,...,vN,timestamp\\n — see core/osc_object.py and core/serial_object.py.
+
+Pin rows are edited in the object card table (ui.widgets.object_cards): columns
+start equal width and can be resized by dragging header separators.
 """
 from __future__ import annotations
 
@@ -65,12 +70,12 @@ class InteractiveObject(ABC):
     @abstractmethod
     def send_pin_bundle(
         self,
-        ordered_normalized: List[Tuple[str, float]],
+        ordered_normalized: List[Tuple[Optional[str], float]],
         timestamp: UTCDateTime,
     ) -> Optional[Dict[str, float]]:
         """
-        Send one frame: ordered_normalized is (row_id, 0..1) in pin slot order;
-        length must match len(self.pin_rows).
+        Send one frame: ``ordered_normalized`` has length = wire width (max slot + 1).
+        Each entry is ``(row_id, 0..1)`` for an assigned slot, or ``(None, 0.0)`` padding.
 
         Returns:
             Map row_id -> normalized (0..1) for UI when send succeeds, else None.

@@ -3,9 +3,11 @@ OSC implementation of InteractiveObject.
 
 Firmware / MCU contract (multi-pin):
 - One OSC message per tick at the configured base `address`.
-- Arguments: N remapped floats (wire order: row 0 = Pin_A, row 1 = Pin_B, ...),
+- Arguments: W floats (wire index 0 = Pin_A, … index W-1 = last slot),
   then one string: UTC timestamp as "%Y-%m-%dT%H:%M:%S.%fZ".
-- N = number of configured pin rows (1..MAX_PIN_SLOTS). Decoder infers N from typetag.
+- Active slots: remapped values clamped to [0, 1]. Unused wire slots: sentinel
+  ``settings.WIRE_INACTIVE_PIN_SENTINEL`` (outside [0, 1]); firmware ignores those.
+- W = max(slot_index)+1 among configured rows (1..MAX_PIN_SLOTS). Decoder infers W from typetag.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from pythonosc.udp_client import UDPClient
 import logging
 
 from core.interactive_object import InteractiveObject
+from settings import WIRE_INACTIVE_PIN_SENTINEL
 
 logger = logging.getLogger(__name__)
 
@@ -42,24 +45,15 @@ class OSCObject(InteractiveObject):
 
     def send_pin_bundle(
         self,
-        ordered_normalized: List[Tuple[str, float]],
+        ordered_normalized: List[Tuple[Optional[str], float]],
         timestamp: UTCDateTime,
     ) -> Optional[Dict[str, float]]:
         if not self.streaming_enabled or self._client is None:
             return None
-        if len(ordered_normalized) != len(self.pin_rows):
-            logger.warning(
-                "OSC %s: pin value count %s != rows %s",
-                self.object_id,
-                len(ordered_normalized),
-                len(self.pin_rows),
-            )
+        if not ordered_normalized:
             return None
-        for i, (rid, _) in enumerate(ordered_normalized):
-            if i >= len(self.pin_rows) or self.pin_rows[i].row_id != rid:
-                logger.warning("OSC %s: row_id mismatch at index %s", self.object_id, i)
-                return None
 
+        row_by_id = {r.row_id: r for r in self.pin_rows}
         timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         ui_norm: Dict[str, float] = {}
 
@@ -67,11 +61,19 @@ class OSCObject(InteractiveObject):
             from pythonosc.osc_message_builder import OscMessageBuilder
 
             builder = OscMessageBuilder(self.address)
-            for i, (row_id, norm) in enumerate(ordered_normalized):
-                row = self.pin_rows[i]
+            for row_id, norm in ordered_normalized:
                 n = max(0.0, min(1.0, norm))
+                if row_id is None:
+                    builder.add_arg(float(WIRE_INACTIVE_PIN_SENTINEL))
+                    continue
+                row = row_by_id.get(row_id)
+                if row is None:
+                    logger.warning(
+                        "OSC %s: unknown row_id %s in wire bundle", self.object_id, row_id
+                    )
+                    return None
                 ui_norm[row_id] = n
-                out = self.remap_for_row(n, row)
+                out = max(0.0, min(1.0, self.remap_for_row(n, row)))
                 builder.add_arg(float(out))
             builder.add_arg(timestamp_str)
             msg = builder.build()

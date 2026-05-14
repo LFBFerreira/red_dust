@@ -8,7 +8,7 @@ import uuid
 from typing import Callable, Dict, List, Optional, Set
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap, QShowEvent
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
 from core.pin_stream import (
     PinStreamRow,
     pin_rows_to_dicts,
-    slot_label_for_index,
 )
 from .channel_colors import color_for_channel
 from settings import (
@@ -91,6 +90,7 @@ class ObjectCard(QWidget):
         self._active_channel: Optional[str] = None
         self._serial_connected = False
         self._osc_endpoint_debounce_timer: Optional[QTimer] = None
+        self._pin_table_columns_equalized = False
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -182,12 +182,9 @@ class ObjectCard(QWidget):
             ["Slot", "Channel", "Min", "Max", "Value", ""]
         )
         hdr = self.pin_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setStretchLastSection(False)
+        for col in range(self.pin_table.columnCount()):
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
         self.pin_table.verticalHeader().setVisible(False)
         right.addWidget(self.pin_table, 1)
 
@@ -202,6 +199,41 @@ class ObjectCard(QWidget):
         self.setLayout(main)
         self._update_add_button_state()
         self._update_stream_button()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if self._pin_table_columns_equalized:
+            return
+        QTimer.singleShot(0, self._deferred_equalize_pin_columns_once)
+
+    def _deferred_equalize_pin_columns_once(self, attempt: int = 0) -> None:
+        if self._pin_table_columns_equalized:
+            return
+        vw = self.pin_table.viewport().width()
+        if vw < 80 and attempt < 25:
+            QTimer.singleShot(
+                50, lambda: self._deferred_equalize_pin_columns_once(attempt + 1)
+            )
+            return
+        if vw >= 80:
+            self._equalize_pin_table_column_widths()
+        self._pin_table_columns_equalized = True
+
+    def _equalize_pin_table_column_widths(self) -> None:
+        """Split viewport width evenly across pin table columns (one-time after first show)."""
+        tbl = self.pin_table
+        vw = tbl.viewport().width()
+        n = tbl.columnCount()
+        if vw < 1 or n <= 0:
+            return
+        hdr = tbl.horizontalHeader()
+        base = max(48, vw // n)
+        hdr.blockSignals(True)
+        for c in range(n - 1):
+            hdr.resizeSection(c, base)
+        last_w = max(48, vw - base * (n - 1))
+        hdr.resizeSection(n - 1, last_w)
+        hdr.blockSignals(False)
 
     def _on_title_edited(self, text: str) -> None:
         self._display_title = text
@@ -238,7 +270,7 @@ class ObjectCard(QWidget):
             if ch in existing:
                 continue
             row_id = str(uuid.uuid4())
-            slot_index = len(self._pin_rows)
+            slot_index = self._first_free_slot_index()
             self._pin_rows.append(
                 {
                     "row_id": row_id,
@@ -254,18 +286,63 @@ class ObjectCard(QWidget):
         self._update_add_button_state()
         self._update_stream_button()
 
+    def _first_free_slot_index(self) -> int:
+        used = {int(r["slot_index"]) for r in self._pin_rows}
+        for sp in range(MAX_PIN_SLOTS):
+            if sp not in used:
+                return sp
+        return 0
+
+    def _normalize_pin_row_slots(self) -> None:
+        """Assign distinct slot_index in 0..MAX_PIN_SLOTS-1 (fixes collisions from sessions)."""
+        if not self._pin_rows:
+            return
+        used: set[int] = set()
+        for i, row in enumerate(self._pin_rows):
+            s = int(row.get("slot_index", i))
+            s = max(0, min(MAX_PIN_SLOTS - 1, s))
+            while s in used:
+                s = (s + 1) % MAX_PIN_SLOTS
+            used.add(s)
+            row["slot_index"] = s
+
+    def _on_pin_slot_combo_changed(self, row: dict, new_slot: int) -> None:
+        """User picked a physical pin slot; swap if that slot is already taken."""
+        old = int(row["slot_index"])
+        new_slot = max(0, min(MAX_PIN_SLOTS - 1, int(new_slot)))
+        if new_slot == old:
+            return
+        other = next(
+            (
+                r
+                for r in self._pin_rows
+                if r is not row and int(r["slot_index"]) == new_slot
+            ),
+            None,
+        )
+        if other is not None:
+            other["slot_index"] = old
+        row["slot_index"] = new_slot
+        self._rebuild_pin_table()
+        self.config_changed.emit(self._object_id)
+
     def _rebuild_pin_table(self) -> None:
         self._row_progress.clear()
         self.pin_table.setRowCount(0)
         for i, row in enumerate(self._pin_rows):
-            row["slot_index"] = i
             self.pin_table.insertRow(i)
-            slot_name = (
-                PIN_SLOT_LABELS[i] if i < len(PIN_SLOT_LABELS) else slot_label_for_index(i)
+            slot_cb = QComboBox()
+            slot_cb.addItems(list(PIN_SLOT_LABELS))
+            si = int(row.get("slot_index", i))
+            si = max(0, min(len(PIN_SLOT_LABELS) - 1, si))
+            row["slot_index"] = si
+            slot_cb.blockSignals(True)
+            slot_cb.setCurrentIndex(si)
+            slot_cb.blockSignals(False)
+            slot_cb.currentIndexChanged.connect(
+                lambda idx, r=row: self._on_pin_slot_combo_changed(r, idx)
             )
-            slot_item = QTableWidgetItem(slot_name)
-            slot_item.setFlags(slot_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.pin_table.setItem(i, 0, slot_item)
+            self.pin_table.setCellWidget(i, 0, slot_cb)
 
             ch_item = QTableWidgetItem(row["channel_id"])
             ch_item.setFlags(ch_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -296,7 +373,7 @@ class ObjectCard(QWidget):
             bar.setValue(0)
             bar.setFormat("0.000")
             bar.setMinimumHeight(22)
-            bar.setMinimumWidth(80)
+            bar.setMinimumWidth(10)
             self.pin_table.setCellWidget(i, 4, bar)
             self._row_progress[row["row_id"]] = bar
 
@@ -337,6 +414,7 @@ class ObjectCard(QWidget):
     def apply_pin_rows_from_core(self, rows: List[PinStreamRow]) -> None:
         """Mirror ``InteractiveObject.pin_rows`` in the table (no ``config_changed`` emit)."""
         self._pin_rows = pin_rows_to_dicts(rows)
+        self._normalize_pin_row_slots()
         self._rebuild_pin_table()
         self._update_add_button_state()
         self._update_stream_button()
@@ -618,6 +696,7 @@ class ObjectCard(QWidget):
                         "slot_index": int(pr.get("slot_index", i)),
                     }
                 )
+            self._normalize_pin_row_slots()
             self._rebuild_pin_table()
 
         if "streaming_enabled" in config:

@@ -3,7 +3,7 @@ Object Manager for streaming normalized data to interactive objects (OSC and Ser
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from obspy import UTCDateTime
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -11,7 +11,7 @@ import logging
 
 from core.interactive_object import InteractiveObject
 from core.osc_object import OSCObject
-from core.pin_stream import PinStreamRow
+from core.pin_stream import PinStreamRow, wire_bundle_width
 from core.serial_object import SerialObject
 from settings import SERIAL_BAUDRATE, OSC_OUTPUT_INTERVAL_MS, SERIAL_OUTPUT_INTERVAL_MS
 
@@ -180,8 +180,10 @@ class OSCManager(QObject):
             current_time = UTCDateTime.now()
 
         if obj.pin_rows:
-            zeros = [(r.row_id, 0.0) for r in obj.pin_rows]
-            sent = obj.send_pin_bundle(zeros, current_time)
+            w = wire_bundle_width(list(obj.pin_rows))
+            if w > 0:
+                zeros: List[Tuple[Optional[str], float]] = [(None, 0.0)] * w
+                sent = obj.send_pin_bundle(zeros, current_time)
             if sent is not None:
                 self.object_value_updated.emit(object_id, sent)
 
@@ -248,8 +250,10 @@ class OSCManager(QObject):
 
         for obj in self._objects.values():
             if obj.streaming_enabled and obj.pin_rows:
-                zeros = [(r.row_id, 0.0) for r in obj.pin_rows]
-                obj.send_pin_bundle(zeros, current_time)
+                w = wire_bundle_width(list(obj.pin_rows))
+                if w > 0:
+                    zeros: List[Tuple[Optional[str], float]] = [(None, 0.0)] * w
+                    obj.send_pin_bundle(zeros, current_time)
 
         self._streaming = False
         self.streaming_state_changed.emit(False)
@@ -276,15 +280,29 @@ class OSCManager(QObject):
                 self.streaming_state_changed.emit(False)
             logger.info("OSCManager: shutdown complete")
 
-    def _build_ordered_values(self, obj: InteractiveObject, current_time: UTCDateTime):
+    def _build_ordered_values(
+        self, obj: InteractiveObject, current_time: UTCDateTime
+    ) -> Optional[List[Tuple[Optional[str], float]]]:
         if not self._waveform_model or not obj.pin_rows:
             return None
-        ordered = []
+        width = wire_bundle_width(list(obj.pin_rows))
+        if width <= 0:
+            return None
+        by_slot: Dict[int, PinStreamRow] = {}
         for row in obj.pin_rows:
-            n = self._waveform_model.get_normalized_value_for_channel(
-                row.channel_id, current_time
-            )
-            ordered.append((row.row_id, n))
+            si = int(row.slot_index)
+            if 0 <= si < width:
+                by_slot[si] = row
+        ordered: List[Tuple[Optional[str], float]] = []
+        for s in range(width):
+            r = by_slot.get(s)
+            if r is None:
+                ordered.append((None, 0.0))
+            else:
+                n = self._waveform_model.get_normalized_value_for_channel(
+                    r.channel_id, current_time
+                )
+                ordered.append((r.row_id, n))
         return ordered
 
     def flush_object_frame(self, object_id: str) -> None:

@@ -38,7 +38,7 @@ const float gyHigh = 10.0;
 float graphX = 0.0;
 bool graphInitialized = false;
 
-// Per-pin latest normalized values (0..1 after clamp) and PWM
+// Per-pin latest live values (0..1) and PWM; slots marked inactive stay at 0 here
 float latestPinValues[MAX_PINS] = {0};
 int pwmValues[MAX_PINS] = {0};
 float lastSnapshotForGui[MAX_PINS] = {NAN};
@@ -103,8 +103,8 @@ void restartGraphTraces() {
   }
 }
 
-// Apply one frame: incoming[0..incomingCount-1] are values from wire (clamp 0..1);
-// missing slots zero-filled. Updates PWM, graph, and status.
+// Apply one frame: incoming[0..incomingCount-1] from wire; [0,1] = live level;
+// outside that range = inactive slot (do not treat as real control). Missing tail: 0.
 void applyPinFrame(const float* incoming, int incomingCount, DataSource source) {
   if (incomingCount < 0) incomingCount = 0;
   if (incomingCount > MAX_PINS) incomingCount = MAX_PINS;
@@ -114,10 +114,18 @@ void applyPinFrame(const float* incoming, int incomingCount, DataSource source) 
     lastOscTime = millis();
   }
 
+  bool slotLive[MAX_PINS] = {false};
   for (int i = 0; i < MAX_PINS; i++) {
     float v = (incoming != nullptr && i < incomingCount) ? incoming[i] : 0.0f;
     if (isnan(v) || isinf(v)) v = 0.0f;
+    if (v < 0.0f || v > 1.0f) {
+      latestPinValues[i] = 0.0f;
+      pwmValues[i] = mapValueToPWM(0.0f);
+      slotLive[i] = false;
+      continue;
+    }
     v = constrain(v, 0.0f, 1.0f);
+    slotLive[i] = true;
     latestPinValues[i] = v;
     pwmValues[i] = mapValueToPWM(v);
   }
@@ -133,7 +141,9 @@ void applyPinFrame(const float* incoming, int incomingCount, DataSource source) 
 
     // Only plot traces for slots present in this frame (typetag float count).
     // Otherwise extra traces keep advancing (often at y=0) after channel count drops.
+    // Skip inactive (out-of-range) wire values so padding does not draw a trace.
     for (int i = 0; i < incomingCount && i < MAX_PINS; i++) {
+      if (!slotLive[i]) continue;
       float graphValue = latestPinValues[i] * 10.0f;
       pinTraces[i]->addPoint(graphX, graphValue);
     }

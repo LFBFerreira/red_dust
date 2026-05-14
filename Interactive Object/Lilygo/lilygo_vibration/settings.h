@@ -9,7 +9,8 @@ static const int OUTPUT_PINS[MAX_PINS] = {25, 26, 27, 32, 33};
 // Serial communication configuration
 #define SERIAL_BAUDRATE 115200  // Serial communication baud rate
 
-// OSC configuration — base path; payload is N floats (Pin_A..) + timestamp string
+// OSC / Serial multi-pin: N floats (Pin_A..) + timestamp. Values in [0,1] drive PWM;
+// values outside [0,1] mean that slot is inactive (padding / no channel), PWM off.
 const char* OSC_PATH = "/red_dust/osc_object_1";
 #define OSC_PORT 8000  // UDP port for OSC messages
 

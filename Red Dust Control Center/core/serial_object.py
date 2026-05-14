@@ -2,8 +2,10 @@
 Serial implementation of InteractiveObject.
 
 Firmware contract (multi-pin):
-- One line per tick: v1,v2,...,vN,timestamp\\n
-- Values are remapped floats in pin row order (Pin_A first); timestamp is ISO8601 UTC.
+- One line per tick: v1,v2,...,vW,timestamp\\n
+- Floats in **wire slot order** (index 0 = Pin_A); W = max(slot_index)+1.
+- Active slots: remapped values clamped to [0, 1]. Unused slots: sentinel
+  ``settings.WIRE_INACTIVE_PIN_SENTINEL`` (outside [0, 1]); firmware ignores those.
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import serial
 import logging
 
 from core.interactive_object import InteractiveObject
+from settings import WIRE_INACTIVE_PIN_SENTINEL
 
 logger = logging.getLogger(__name__)
 
@@ -66,34 +69,33 @@ class SerialObject(InteractiveObject):
 
     def send_pin_bundle(
         self,
-        ordered_normalized: List[Tuple[str, float]],
+        ordered_normalized: List[Tuple[Optional[str], float]],
         timestamp: UTCDateTime,
     ) -> Optional[Dict[str, float]]:
         if not self.streaming_enabled or self._serial is None or not self._serial.is_open:
             return None
-        if len(ordered_normalized) != len(self.pin_rows):
-            logger.warning(
-                "Serial %s: pin value count %s != rows %s",
-                self.object_id,
-                len(ordered_normalized),
-                len(self.pin_rows),
-            )
+        if not ordered_normalized:
             return None
-        for i, (rid, _) in enumerate(ordered_normalized):
-            if i >= len(self.pin_rows) or self.pin_rows[i].row_id != rid:
-                logger.warning("Serial %s: row_id mismatch at index %s", self.object_id, i)
-                return None
 
+        row_by_id = {r.row_id: r for r in self.pin_rows}
         timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         ui_norm: Dict[str, float] = {}
         parts: List[str] = []
 
         try:
-            for i, (row_id, norm) in enumerate(ordered_normalized):
-                row = self.pin_rows[i]
+            for row_id, norm in ordered_normalized:
                 n = max(0.0, min(1.0, norm))
+                if row_id is None:
+                    parts.append(f"{WIRE_INACTIVE_PIN_SENTINEL:.6f}")
+                    continue
+                row = row_by_id.get(row_id)
+                if row is None:
+                    logger.warning(
+                        "Serial %s: unknown row_id %s in wire bundle", self.object_id, row_id
+                    )
+                    return None
                 ui_norm[row_id] = n
-                out = self.remap_for_row(n, row)
+                out = max(0.0, min(1.0, self.remap_for_row(n, row)))
                 parts.append(f"{out:.6f}")
             parts.append(timestamp_str)
             message = ",".join(parts) + "\n"
