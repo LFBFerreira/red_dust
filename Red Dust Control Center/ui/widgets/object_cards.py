@@ -7,7 +7,7 @@ import logging
 import uuid
 from typing import Callable, Dict, List, Optional, Set
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
@@ -37,6 +37,7 @@ from settings import (
     INTERACTIVE_OBJECTS_HEIGHT,
     MAX_PIN_SLOTS,
     OBJECT_CARD_LEFT_PANEL_MAX_WIDTH,
+    OSC_OBJECT_ENDPOINT_DEBOUNCE_MS,
     PIN_SLOT_LABELS,
     SERIAL_BAUDRATE,
     STREAMING_PORT,
@@ -89,6 +90,7 @@ class ObjectCard(QWidget):
         self._row_progress: Dict[str, QProgressBar] = {}
         self._active_channel: Optional[str] = None
         self._serial_connected = False
+        self._osc_endpoint_debounce_timer: Optional[QTimer] = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -117,9 +119,8 @@ class ObjectCard(QWidget):
             self.address_edit.setText(
                 f"/red_dust/{self._display_title.lower().replace(' ', '_')}"
             )
-            self.address_edit.textChanged.connect(
-                lambda: self.config_changed.emit(self._object_id)
-            )
+            self.address_edit.textChanged.connect(self._schedule_osc_endpoint_config_changed)
+            self.address_edit.editingFinished.connect(self._flush_osc_endpoint_config_changed)
             addr_row.addWidget(self.address_edit, 1)
             left.addLayout(addr_row)
 
@@ -127,11 +128,15 @@ class ObjectCard(QWidget):
             host_row.addWidget(QLabel("IP Address:"))
             self.host_edit = QLineEdit()
             self.host_edit.setText("127.0.0.1")
-            self.host_edit.textChanged.connect(
-                lambda: self.config_changed.emit(self._object_id)
-            )
+            self.host_edit.textChanged.connect(self._schedule_osc_endpoint_config_changed)
+            self.host_edit.editingFinished.connect(self._flush_osc_endpoint_config_changed)
             host_row.addWidget(self.host_edit, 1)
             left.addLayout(host_row)
+
+            self._osc_endpoint_debounce_timer = QTimer(self)
+            self._osc_endpoint_debounce_timer.setSingleShot(True)
+            self._osc_endpoint_debounce_timer.setInterval(OSC_OBJECT_ENDPOINT_DEBOUNCE_MS)
+            self._osc_endpoint_debounce_timer.timeout.connect(self._emit_osc_endpoint_config_changed)
         else:
             port_row = QHBoxLayout()
             port_row.addWidget(QLabel("Serial Port:"))
@@ -201,6 +206,21 @@ class ObjectCard(QWidget):
     def _on_title_edited(self, text: str) -> None:
         self._display_title = text
         self.display_title_changed.emit(self._object_id, text)
+
+    def _schedule_osc_endpoint_config_changed(self) -> None:
+        """Restart debounce: apply host/address to OSC client after typing pauses."""
+        if self._osc_endpoint_debounce_timer is None:
+            return
+        self._osc_endpoint_debounce_timer.start()
+
+    def _emit_osc_endpoint_config_changed(self) -> None:
+        self.config_changed.emit(self._object_id)
+
+    def _flush_osc_endpoint_config_changed(self) -> None:
+        """Apply immediately when the field loses focus (or Return)."""
+        if self._osc_endpoint_debounce_timer is not None:
+            self._osc_endpoint_debounce_timer.stop()
+        self.config_changed.emit(self._object_id)
 
     def _channels_in_table(self) -> set:
         return {r["channel_id"] for r in self._pin_rows}
@@ -572,10 +592,16 @@ class ObjectCard(QWidget):
             self._display_title = config["title"]
 
         if self._communication_type == "OSC":
+            if self._osc_endpoint_debounce_timer is not None:
+                self._osc_endpoint_debounce_timer.stop()
             if "address" in config:
+                self.address_edit.blockSignals(True)
                 self.address_edit.setText(config["address"])
+                self.address_edit.blockSignals(False)
             if "host" in config:
+                self.host_edit.blockSignals(True)
                 self.host_edit.setText(config["host"])
+                self.host_edit.blockSignals(False)
         else:
             if "port" in config:
                 self._set_serial_port(config["port"])

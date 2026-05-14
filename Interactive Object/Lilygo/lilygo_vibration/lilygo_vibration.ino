@@ -125,7 +125,15 @@ void applyPinFrame(const float* incoming, int incomingCount, DataSource source) 
   latestValue = latestPinValues[0];
 
   if (graphInitialized) {
-    for (int i = 0; i < MAX_PINS; i++) {
+    static int sLastIncomingCount = -1;
+    if (sLastIncomingCount >= 0 && incomingCount < sLastIncomingCount) {
+      restartGraphTraces();
+    }
+    sLastIncomingCount = incomingCount;
+
+    // Only plot traces for slots present in this frame (typetag float count).
+    // Otherwise extra traces keep advancing (often at y=0) after channel count drops.
+    for (int i = 0; i < incomingCount && i < MAX_PINS; i++) {
       float graphValue = latestPinValues[i] * 10.0f;
       pinTraces[i]->addPoint(graphX, graphValue);
     }

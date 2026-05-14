@@ -287,6 +287,23 @@ class OSCManager(QObject):
             ordered.append((row.row_id, n))
         return ordered
 
+    def flush_object_frame(self, object_id: str) -> None:
+        """Send one streaming frame immediately (e.g. after pin layout changes while streaming)."""
+        if self._waveform_model is None or self._playback_controller is None:
+            return
+        obj = self._objects.get(object_id)
+        if obj is None or not obj.streaming_enabled or not obj.pin_rows:
+            return
+        current_time = self._playback_controller.get_current_timestamp()
+        if current_time is None:
+            return
+        ordered = self._build_ordered_values(obj, current_time)
+        if not ordered:
+            return
+        sent = obj.send_pin_bundle(ordered, current_time)
+        if sent is not None:
+            self.object_value_updated.emit(obj.object_id, sent)
+
     def _send_osc_frame(self) -> None:
         if self._waveform_model is None or self._playback_controller is None:
             return

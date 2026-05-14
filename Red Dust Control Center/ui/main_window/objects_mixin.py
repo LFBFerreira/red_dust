@@ -185,6 +185,9 @@ class MainWindowObjectsMixin(_MainWindowBase):
             if self.osc_manager.is_object_streaming(object_id):
                 self.osc_manager.stop_object_streaming(object_id)
 
+        if self.osc_manager.is_object_streaming(object_id):
+            self.osc_manager.flush_object_frame(object_id)
+
     def _on_streaming_state_changed(self, streaming: bool):
         """Handle OSC streaming state change (global)."""
         logger.debug(
@@ -242,6 +245,8 @@ class MainWindowObjectsMixin(_MainWindowBase):
             card = self.object_cards.get_card(oid)
             if card is not None:
                 card.apply_pin_rows_from_core(obj.pin_rows)
+            if obj.streaming_enabled:
+                self.osc_manager.flush_object_frame(oid)
             logger.debug(
                 "Pruned interactive object %s pins to %s slot(s) for playback selection",
                 oid,

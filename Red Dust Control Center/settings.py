@@ -35,7 +35,7 @@ WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default waveform viewer width (pixels)
 INTERACTIVE_OBJECTS_HEIGHT = 300  # Tab panel height for interactive objects (pixels)
 TAB_ICON_SIZE = 16  # Streaming status icon in object tabs (pixels)
 OBJECT_CARD_LEFT_PANEL_MAX_WIDTH = 300  # OSC/Serial name & connection column (pixels)
-
+OSC_OBJECT_ENDPOINT_DEBOUNCE_MS = 450  # Apply OSC host/address after typing pauses (avoids DNS per key)
 
 # --- Multi-pin streaming (firmware / protocol contract) ---
 
