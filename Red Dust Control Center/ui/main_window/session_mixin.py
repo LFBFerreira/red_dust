@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QSettings
-from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QMenu
 
 from settings import QSETTINGS_APPLICATION, QSETTINGS_ORGANIZATION
@@ -38,8 +37,9 @@ class MainWindowSessionMixin(_MainWindowBase):
         load_action.setShortcut("Ctrl+O")
         load_action.triggered.connect(self._on_load)
 
-        load_recent_action = file_menu.addAction("Load Recent")
-        load_recent_action.triggered.connect(self._on_load_recent)
+        self._load_recent_menu = QMenu("Load Recent", self)
+        self._load_recent_menu.aboutToShow.connect(self._populate_load_recent_menu)
+        file_menu.addMenu(self._load_recent_menu)
 
         about_menu = menubar.addMenu("About")
 
@@ -115,31 +115,19 @@ class MainWindowSessionMixin(_MainWindowBase):
 
         return result
 
-    def _on_load_recent(self):
-        """Handle Load Recent toolbar action - show menu with recent sessions."""
+    def _populate_load_recent_menu(self):
+        """Rebuild File → Load Recent submenu when it opens (hover or keyboard)."""
+        self._load_recent_menu.clear()
         recent_sessions = self._get_recent_sessions()
-
         if not recent_sessions:
-            QMessageBox.information(
-                self,
-                "No Recent Sessions",
-                "No recent session files found.\n\n"
-                "Use File → Load… or Save to open or create a .json session; "
-                "those files will appear here afterward.",
-            )
+            placeholder = self._load_recent_menu.addAction("No recent sessions")
+            placeholder.setEnabled(False)
             return
-
-        menu = QMenu(self)
-
         for session_path in recent_sessions:
-            display_name = session_path.name
-            action = menu.addAction(display_name)
-            action.setData(str(session_path))
+            action = self._load_recent_menu.addAction(session_path.name)
             action.triggered.connect(
-                lambda checked, path=session_path: self._load_session(path)
+                lambda checked=False, path=session_path: self._load_session(path)
             )
-
-        menu.exec(QCursor.pos())
 
     def _on_save(self):
         """Handle Save menu action."""

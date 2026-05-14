@@ -102,7 +102,11 @@ class MainWindowDataMixin(_MainWindowBase):
         selected = self.waveform_model.get_selected_channels()
         self.playback_controls.set_selected_channels(selected)
         self._update_object_card_channels()
-        self._sync_interactive_objects_to_playback_channels(set(selected))
+        # Session load: objects are restored with pin_rows before data finishes loading.
+        # Do not prune pins against the default stream selection here — that would drop
+        # rows whose channels only appear after _restore_session_state_after_load runs.
+        if self.pending_session_state is None:
+            self._sync_interactive_objects_to_playback_channels(set(selected))
 
         logger.info("Updating waveform viewer...")
         viewer_start = time.time()
