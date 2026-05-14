@@ -76,6 +76,7 @@ class MainWindowPlaybackMixin(_MainWindowBase):
             self.waveform_viewer.update_waveform(stream, synced)
         if not synced:
             self.playback_controller.stop()
+        self._sync_interactive_objects_to_playback_channels(set(synced))
         self._update_metadata()
         self._update_object_card_channels()
         self._refresh_value_display()

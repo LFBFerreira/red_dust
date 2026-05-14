@@ -3,12 +3,18 @@
 import logging
 from pathlib import Path
 
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QMenu
+from PySide6.QtCore import QSettings
 from PySide6.QtGui import QCursor
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QMenu
+
+from settings import QSETTINGS_APPLICATION, QSETTINGS_ORGANIZATION
 
 from .base import _MainWindowBase
 
 logger = logging.getLogger(__name__)
+
+_RECENT_SESSION_FILES_KEY = "recent_session_files"
+_RECENT_SESSION_FILES_MAX_STORED = 20
 
 
 class MainWindowSessionMixin(_MainWindowBase):
@@ -40,25 +46,74 @@ class MainWindowSessionMixin(_MainWindowBase):
         about_action = about_menu.addAction("About Red Dust Control Center")
         about_action.triggered.connect(self._on_about)
 
+    def _session_qsettings(self) -> QSettings:
+        return QSettings(QSETTINGS_ORGANIZATION, QSETTINGS_APPLICATION)
+
+    def _read_recent_session_paths(self) -> list[str]:
+        """Paths from last successful File > Load / Save, most recent first."""
+        raw = self._session_qsettings().value(_RECENT_SESSION_FILES_KEY, [])
+        if not raw:
+            return []
+        if isinstance(raw, str):
+            return [raw]
+        return [str(x) for x in raw]
+
+    def _write_recent_session_paths(self, paths: list[str]) -> None:
+        self._session_qsettings().setValue(_RECENT_SESSION_FILES_KEY, paths)
+
+    def _remember_session_path(self, file_path: Path) -> None:
+        """Record a session file for File > Load Recent (after successful load or save)."""
+        try:
+            resolved = str(Path(file_path).resolve())
+        except OSError as e:
+            logger.warning("Could not resolve session path %s: %s", file_path, e)
+            return
+        paths = self._read_recent_session_paths()
+        paths = [p for p in paths if Path(p).resolve() != Path(resolved)]
+        paths.insert(0, resolved)
+        paths = paths[:_RECENT_SESSION_FILES_MAX_STORED]
+        self._write_recent_session_paths(paths)
+
     def _get_recent_sessions(self, max_count: int = 10) -> list[Path]:
         """
-        Get list of recent session files, sorted by modification time.
-
-        Args:
-            max_count: Maximum number of recent sessions to return
-
-        Returns:
-            List of Path objects to recent session files, most recent first
+        Recent session JSON files: MRU from successful Load/Save, then others
+        in ``sessions_dir`` by modification time. Paths must still exist.
         """
-        sessions_dir = self.session_manager.sessions_dir
-        if not sessions_dir.exists():
-            return []
+        raw = self._read_recent_session_paths()
+        mru_valid: list[Path] = []
+        seen_mru: set[Path] = set()
+        for s in raw:
+            p = Path(s).expanduser()
+            if not p.is_file() or p.suffix.lower() != ".json":
+                continue
+            key = p.resolve()
+            if key in seen_mru:
+                continue
+            seen_mru.add(key)
+            mru_valid.append(p)
 
-        session_files = list(sessions_dir.glob("*.json"))
+        new_stored = [str(p.resolve()) for p in mru_valid]
+        if new_stored != list(raw):
+            self._write_recent_session_paths(new_stored)
 
-        session_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        result = mru_valid[:max_count]
+        seen: set[Path] = {p.resolve() for p in result}
 
-        return session_files[:max_count]
+        if len(result) < max_count:
+            sessions_dir = self.session_manager.sessions_dir
+            if sessions_dir.exists():
+                extra = [p for p in sessions_dir.glob("*.json") if p.is_file()]
+                extra.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                for p in extra:
+                    key = p.resolve()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    result.append(p)
+                    if len(result) >= max_count:
+                        break
+
+        return result
 
     def _on_load_recent(self):
         """Handle Load Recent toolbar action - show menu with recent sessions."""
@@ -68,7 +123,9 @@ class MainWindowSessionMixin(_MainWindowBase):
             QMessageBox.information(
                 self,
                 "No Recent Sessions",
-                "No recent session files found.",
+                "No recent session files found.\n\n"
+                "Use File → Load… or Save to open or create a .json session; "
+                "those files will appear here afterward.",
             )
             return
 
@@ -117,6 +174,7 @@ class MainWindowSessionMixin(_MainWindowBase):
             )
 
             self.session_manager.save_session(file_path, state)
+            self._remember_session_path(file_path)
 
             QMessageBox.information(
                 self,
@@ -168,6 +226,7 @@ class MainWindowSessionMixin(_MainWindowBase):
                 self.pending_session_state = None
 
             self.current_session_path = file_path
+            self._remember_session_path(file_path)
 
             QMessageBox.information(
                 self,
@@ -213,6 +272,7 @@ class MainWindowSessionMixin(_MainWindowBase):
                 self.playback_controller.stop()
             self._update_metadata()
             self._update_object_card_channels()
+            self._sync_interactive_objects_to_playback_channels(set(sel))
             tr = self.waveform_model.get_time_range()
             ct = self.playback_controller.get_current_timestamp()
             if tr and ct is not None:

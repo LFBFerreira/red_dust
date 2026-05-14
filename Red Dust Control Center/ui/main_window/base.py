@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtWidgets import QTextEdit
+from PySide6.QtWidgets import QLabel, QTextEdit
 
 from core.data_manager import DataManager
 from core.osc_manager import OSCManager
@@ -36,4 +36,5 @@ class _MainWindowBase:
     playback_controls: PlaybackControls
     waveform_viewer: WaveformViewer
     object_cards: ObjectCardsContainer
+    dataset_label: QLabel
     metadata_text: QTextEdit

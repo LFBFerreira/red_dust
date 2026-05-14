@@ -5,7 +5,11 @@ import time
 
 from settings import DEFAULT_NETWORK, DEFAULT_STATION
 from .base import _MainWindowBase
-from .constants import _LOG_TAG
+from .constants import (
+    DATASET_LABEL_TITLE_HTML,
+    DATASET_METADATA_EMPTY_MESSAGE,
+    _LOG_TAG,
+)
 from .threads import DataLoadThread, MetadataLoadThread
 
 logger = logging.getLogger(__name__)
@@ -98,6 +102,7 @@ class MainWindowDataMixin(_MainWindowBase):
         selected = self.waveform_model.get_selected_channels()
         self.playback_controls.set_selected_channels(selected)
         self._update_object_card_channels()
+        self._sync_interactive_objects_to_playback_channels(set(selected))
 
         logger.info("Updating waveform viewer...")
         viewer_start = time.time()
@@ -145,13 +150,15 @@ class MainWindowDataMixin(_MainWindowBase):
 
     def _update_metadata(self):
         """Update metadata display."""
+        self.dataset_label.setText(DATASET_LABEL_TITLE_HTML)
+
         if not self.waveform_model.get_stream():
-            self.metadata_text.clear()
+            self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
             return
 
         stream = self.waveform_model.get_stream()
         if stream is None or len(stream) == 0:
-            self.metadata_text.clear()
+            self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
             return
 
         trace = stream[0]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, AbstractSet
 
 from settings import MAX_PIN_SLOTS, PIN_SLOT_LABELS
 
@@ -30,6 +30,17 @@ def remap_normalized(normalized_01: float, lo: float, hi: float) -> float:
     if hi == lo:
         return lo
     return lo + (normalized_01 * (hi - lo))
+
+
+def filter_pin_rows_by_channels(
+    rows: List[PinStreamRow], allowed_channel_ids: AbstractSet[str]
+) -> List[PinStreamRow]:
+    """Keep only rows whose ``channel_id`` is in ``allowed_channel_ids``; renumber ``slot_index``."""
+    kept = [r for r in rows if r.channel_id in allowed_channel_ids]
+    return [
+        PinStreamRow(r.row_id, r.channel_id, r.remap_min, r.remap_max, i)
+        for i, r in enumerate(kept[:MAX_PIN_SLOTS])
+    ]
 
 
 def pin_rows_from_dicts(rows: List[Dict[str, Any]]) -> List[PinStreamRow]:

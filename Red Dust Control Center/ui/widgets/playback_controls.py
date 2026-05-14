@@ -88,13 +88,13 @@ class PlaybackControls(QWidget):
             QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
         )
         channel_layout.addWidget(self.channels_button)
-        self.clear_channels_button = QPushButton("X")
+        self.clear_channels_button = QPushButton("Clear")
         self.clear_channels_button.setToolTip("Unselect all channels")
         self.clear_channels_button.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
         _fm = self.clear_channels_button.fontMetrics()
-        _x_w = _fm.horizontalAdvance("X") + 10
+        _x_w = _fm.horizontalAdvance("Clear") + 26
         self.clear_channels_button.setFixedWidth(_x_w)
         self.clear_channels_button.setStyleSheet("QPushButton { padding: 1px 4px; }")
         self.clear_channels_button.clicked.connect(self._on_clear_all_channels)

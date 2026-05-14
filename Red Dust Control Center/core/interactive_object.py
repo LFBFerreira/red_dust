@@ -11,11 +11,11 @@ v1,...,vN,timestamp\\n — see core/osc_object.py and core/serial_object.py.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple
+from typing import AbstractSet, Dict, List, Optional, Tuple
 
 from obspy import UTCDateTime
 
-from core.pin_stream import PinStreamRow, remap_normalized
+from core.pin_stream import PinStreamRow, filter_pin_rows_by_channels, remap_normalized
 from settings import MAX_PIN_SLOTS
 
 
@@ -44,6 +44,19 @@ class InteractiveObject(ABC):
 
     def set_pin_rows(self, rows: List[PinStreamRow]) -> None:
         self.pin_rows = list(rows[:MAX_PIN_SLOTS])
+
+    def prune_pin_rows_to_channels(self, allowed_channel_ids: AbstractSet[str]) -> bool:
+        """
+        Remove pin rows whose ``channel_id`` is not in ``allowed_channel_ids``.
+
+        Returns:
+            True if ``pin_rows`` changed.
+        """
+        new_rows = filter_pin_rows_by_channels(self.pin_rows, allowed_channel_ids)
+        if new_rows == self.pin_rows:
+            return False
+        self.pin_rows = new_rows
+        return True
 
     @staticmethod
     def remap_for_row(normalized_value: float, row: PinStreamRow) -> float:

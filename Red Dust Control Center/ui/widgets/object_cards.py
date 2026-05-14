@@ -12,7 +12,6 @@ from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -28,31 +27,35 @@ from PySide6.QtWidgets import (
     QComboBox,
 )
 
-from core.pin_stream import slot_label_for_index
+from core.pin_stream import (
+    PinStreamRow,
+    pin_rows_to_dicts,
+    slot_label_for_index,
+)
 from .channel_colors import color_for_channel
 from settings import (
     INTERACTIVE_OBJECTS_HEIGHT,
     MAX_PIN_SLOTS,
+    OBJECT_CARD_LEFT_PANEL_MAX_WIDTH,
     PIN_SLOT_LABELS,
     SERIAL_BAUDRATE,
     STREAMING_PORT,
+    TAB_ICON_SIZE,
 )
 
 logger = logging.getLogger(__name__)
 
-_TAB_ICON_SIZE = 16
-
 
 def streaming_status_tab_icon(streaming: bool) -> QIcon:
     """Small circle: green when streaming, red when idle (for tab bar)."""
-    pix = QPixmap(_TAB_ICON_SIZE, _TAB_ICON_SIZE)
+    pix = QPixmap(TAB_ICON_SIZE, TAB_ICON_SIZE)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     painter.setBrush(QColor(34, 197, 94) if streaming else QColor(239, 68, 68))
     painter.setPen(Qt.PenStyle.NoPen)
     m = 3
-    painter.drawEllipse(m, m, _TAB_ICON_SIZE - 2 * m, _TAB_ICON_SIZE - 2 * m)
+    painter.drawEllipse(m, m, TAB_ICON_SIZE - 2 * m, TAB_ICON_SIZE - 2 * m)
     painter.end()
     return QIcon(pix)
 
@@ -108,10 +111,8 @@ class ObjectCard(QWidget):
         left.addLayout(title_row)
 
         if self._communication_type == "OSC":
-            grid = QGridLayout()
-            grid.setColumnStretch(1, 1)
-            grid.setColumnStretch(3, 1)
-            grid.addWidget(QLabel("Base address:"), 0, 0)
+            addr_row = QHBoxLayout()
+            addr_row.addWidget(QLabel("Base address:"))
             self.address_edit = QLineEdit()
             self.address_edit.setText(
                 f"/red_dust/{self._display_title.lower().replace(' ', '_')}"
@@ -119,15 +120,18 @@ class ObjectCard(QWidget):
             self.address_edit.textChanged.connect(
                 lambda: self.config_changed.emit(self._object_id)
             )
-            grid.addWidget(self.address_edit, 0, 1)
-            grid.addWidget(QLabel("IP Address:"), 0, 2)
+            addr_row.addWidget(self.address_edit, 1)
+            left.addLayout(addr_row)
+
+            host_row = QHBoxLayout()
+            host_row.addWidget(QLabel("IP Address:"))
             self.host_edit = QLineEdit()
             self.host_edit.setText("127.0.0.1")
             self.host_edit.textChanged.connect(
                 lambda: self.config_changed.emit(self._object_id)
             )
-            grid.addWidget(self.host_edit, 0, 3)
-            left.addLayout(grid)
+            host_row.addWidget(self.host_edit, 1)
+            left.addLayout(host_row)
         else:
             port_row = QHBoxLayout()
             port_row.addWidget(QLabel("Serial Port:"))
@@ -149,26 +153,16 @@ class ObjectCard(QWidget):
         stream_btns.addWidget(self.stream_toggle_button, 1)
         left.addLayout(stream_btns)
 
-        hint = QLabel(
-            "<small>Wire order: row 1 = Pin_A, then Pin_B, … (see firmware).</small>"
-        )
-        hint.setWordWrap(True)
-        left.addWidget(hint)
         left.addStretch()
 
         left_wrap = QWidget()
         left_wrap.setLayout(left)
         left_wrap.setMinimumWidth(220)
-        # OSC has a wide address/host grid; a smaller cap leaves more room for the pin table
-        # (Serial’s simpler left column keeps a wider cap — matches the “nice” channel width there).
-        if self._communication_type == "OSC":
-            left_wrap.setMaximumWidth(280)
-        else:
-            left_wrap.setMaximumWidth(320)
+        left_wrap.setMaximumWidth(OBJECT_CARD_LEFT_PANEL_MAX_WIDTH)
 
         right = QVBoxLayout()
         add_row = QHBoxLayout()
-        self.add_channels_button = QPushButton("Add from playback selection")
+        self.add_channels_button = QPushButton("Add channels")
         self.add_channels_button.setToolTip(
             "Adds each currently selected waveform channel as a pin row "
             f"(max {MAX_PIN_SLOTS}). Duplicate channels are skipped."
@@ -317,6 +311,13 @@ class ObjectCard(QWidget):
         if not self._pin_rows and self._streaming:
             self._on_stop_clicked()
         self.config_changed.emit(self._object_id)
+        self._update_add_button_state()
+        self._update_stream_button()
+
+    def apply_pin_rows_from_core(self, rows: List[PinStreamRow]) -> None:
+        """Mirror ``InteractiveObject.pin_rows`` in the table (no ``config_changed`` emit)."""
+        self._pin_rows = pin_rows_to_dicts(rows)
+        self._rebuild_pin_table()
         self._update_add_button_state()
         self._update_stream_button()
 

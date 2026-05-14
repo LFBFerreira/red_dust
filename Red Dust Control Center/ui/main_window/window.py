@@ -27,6 +27,7 @@ from ui.widgets.object_cards import ObjectCardsContainer
 from ui.widgets.playback_controls import PlaybackControls
 from ui.widgets.waveform_viewer import WaveformViewer
 
+from .constants import DATASET_LABEL_TITLE_HTML, DATASET_METADATA_EMPTY_MESSAGE
 from .data_mixin import MainWindowDataMixin
 from .objects_mixin import MainWindowObjectsMixin
 from .playback_mixin import MainWindowPlaybackMixin
@@ -109,14 +110,15 @@ class MainWindow(
         metadata_layout = QVBoxLayout()
         metadata_layout.setContentsMargins(0, 0, 0, 0)
 
-        dataset_label = QLabel("<b>Dataset Information</b>")
-        dataset_label.setAlignment(
+        self.dataset_label = QLabel(DATASET_LABEL_TITLE_HTML)
+        self.dataset_label.setAlignment(
             Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
         )
-        metadata_layout.addWidget(dataset_label)
+        metadata_layout.addWidget(self.dataset_label)
 
         self.metadata_text = QTextEdit()
         self.metadata_text.setReadOnly(True)
+        self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
         metadata_layout.addWidget(self.metadata_text, 1)
         metadata_widget.setLayout(metadata_layout)
         row1_splitter.addWidget(metadata_widget)
@@ -152,9 +154,18 @@ class MainWindow(
         )
         main_layout.addWidget(self.object_cards)
 
+        log_section = QWidget()
+        log_layout = QVBoxLayout()
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        log_layout.setSpacing(4)
+        log_title = QLabel("<b>Log</b>")
+        log_title.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        log_layout.addWidget(log_title)
         self.log_viewer = LogViewer()
         self.log_viewer.setMaximumHeight(150)
-        main_layout.addWidget(self.log_viewer)
+        log_layout.addWidget(self.log_viewer, 1)
+        log_section.setLayout(log_layout)
+        main_layout.addWidget(log_section)
 
     def _setup_logging(self):
         """Set up logging to both console and UI."""

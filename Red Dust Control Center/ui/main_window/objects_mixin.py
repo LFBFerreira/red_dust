@@ -223,6 +223,31 @@ class MainWindowObjectsMixin(_MainWindowBase):
         for card in self.object_cards._cards.values():
             card.set_active_channel(active_channel)
 
+    def _sync_interactive_objects_to_playback_channels(
+        self, allowed_channel_ids: set[str]
+    ) -> None:
+        """
+        Drop pin rows on each ``InteractiveObject`` (and matching card UI) whose
+        ``channel_id`` is not in the current playback selection.
+        """
+        allowed = frozenset(allowed_channel_ids)
+        for oid in list(self.osc_manager.get_all_objects().keys()):
+            obj = self.osc_manager.get_object(oid)
+            if obj is None:
+                continue
+            if not obj.prune_pin_rows_to_channels(allowed):
+                continue
+            if obj.streaming_enabled and not obj.pin_rows:
+                self.osc_manager.stop_object_streaming(oid)
+            card = self.object_cards.get_card(oid)
+            if card is not None:
+                card.apply_pin_rows_from_core(obj.pin_rows)
+            logger.debug(
+                "Pruned interactive object %s pins to %s slot(s) for playback selection",
+                oid,
+                len(obj.pin_rows),
+            )
+
     def _on_card_streaming_started(self, object_id: str):
         """Handle card start button clicked."""
         self.osc_manager.start_object_streaming(object_id)

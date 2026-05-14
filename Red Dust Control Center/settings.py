@@ -5,10 +5,11 @@ This module contains default values and configuration constants used throughout
 the application. These can be modified to change default behavior.
 """
 
-# Default data selection values
+# --- Data defaults (PDS / archive selection) ---
+
 DEFAULT_STATION = "ELYSE"
 DEFAULT_YEAR = 2019
-DEFAULT_DAY_OF_YEAR = 96 
+DEFAULT_DAY_OF_YEAR = 96
 
 # Network code (typically "XB" for InSight SEIS)
 DEFAULT_NETWORK = "XB"
@@ -16,28 +17,48 @@ DEFAULT_NETWORK = "XB"
 # Available stations from InSight SEIS
 AVAILABLE_STATIONS = ["ELYSE", "ELYS0", "ELYHK", "ELYH0"]
 
-# Multi-channel playback: max simultaneous selections (matches trace color palette size)
+
+# --- Playback & channel selection ---
+
+# Max simultaneous waveform channel selections (matches trace color palette size)
 MAX_SELECTED_CHANNELS = 20
 
-# UI Layout settings
-LEFT_PANEL_WIDTH = 250  # Width for Dataset Information and Data Picker panels (in pixels)
 
-WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default width for Waveform Viewer (in pixels)
+# --- UI: main window layout ---
 
-# Interactive Objects settings
-INTERACTIVE_OBJECTS_HEIGHT = 300  # Fixed height for Interactive Objects tab panel (in pixels)
+LEFT_PANEL_WIDTH = 250  # Dataset Information and Data Picker panels (pixels)
+WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default waveform viewer width (pixels)
 
-# Multi-pin streaming: max rows per object (ESP / Arduino firmware contract)
+
+# --- UI: interactive object cards ---
+
+INTERACTIVE_OBJECTS_HEIGHT = 300  # Tab panel height for interactive objects (pixels)
+TAB_ICON_SIZE = 16  # Streaming status icon in object tabs (pixels)
+OBJECT_CARD_LEFT_PANEL_MAX_WIDTH = 300  # OSC/Serial name & connection column (pixels)
+
+
+# --- Multi-pin streaming (firmware / protocol contract) ---
+
 MAX_PIN_SLOTS = 5
 # Wire order: index 0 = first float in OSC/Serial frame (Pin_A), etc.
 PIN_SLOT_LABELS = ("Pin_A", "Pin_B", "Pin_C", "Pin_D", "Pin_E")
 
-# OSC Streaming settings
-STREAMING_PORT = 8000  # Default UDP port for OSC streaming (can be overridden per object)
-OSC_OUTPUT_RATE = 60  # Transmission rate for OSC connections (Hz)
+
+# --- OSC streaming ---
+
+STREAMING_PORT = 8000  # Default UDP port (can be overridden per object)
+OSC_OUTPUT_RATE = 60  # Transmission rate (Hz)
 OSC_OUTPUT_INTERVAL_MS = 1000 // OSC_OUTPUT_RATE  # ~16.67 ms
 
-# Serial Communication settings
-SERIAL_BAUDRATE = 115200  # Default baudrate for Serial communication (can be overridden per object)
-SERIAL_OUTPUT_RATE = 60  # Transmission rate for Serial connections (Hz) - separate from baudrate
+
+# --- Serial communication ---
+
+SERIAL_BAUDRATE = 115200  # Default baudrate (can be overridden per object)
+SERIAL_OUTPUT_RATE = 60  # Transmission rate (Hz)
 SERIAL_OUTPUT_INTERVAL_MS = 1000 // SERIAL_OUTPUT_RATE  # ~16.67 ms
+
+
+# --- Application persistence (QSettings) ---
+
+QSETTINGS_ORGANIZATION = "Red Dust"
+QSETTINGS_APPLICATION = "RDCC"
