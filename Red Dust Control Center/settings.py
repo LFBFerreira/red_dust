@@ -32,8 +32,8 @@ WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default waveform viewer width (pixels)
 # Cap points sent to pyqtgraph per channel (display only; stream / cache stay full rate).
 MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL = 8000
 
-# Application color scheme: "system" (follow OS / Qt), "light", or "dark".
-# Forced light/dark uses the Fusion style on most platforms for consistent results.
+# Application color scheme: default when QSettings has no value yet; Theme menu
+# overrides at runtime and is persisted under QSettings key ``app_color_scheme``.
 APP_COLOR_SCHEME = "system"
 
 

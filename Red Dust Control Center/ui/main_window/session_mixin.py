@@ -5,9 +5,16 @@ from pathlib import Path
 
 from obspy import UTCDateTime
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QMenu
+from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QMenu, QApplication
 
 from settings import QSETTINGS_APPLICATION, QSETTINGS_ORGANIZATION
+from ui.theme import (
+    apply_app_color_scheme,
+    read_saved_color_scheme,
+    write_saved_color_scheme,
+    normalize_color_scheme,
+)
 
 from .base import _MainWindowBase
 
@@ -21,7 +28,9 @@ class MainWindowSessionMixin(_MainWindowBase):
     """File menu, recent sessions, and session persistence."""
 
     def _setup_menu_bar(self):
-        """Set up the menu bar with File and About menus."""
+        """Set up the menu bar with File, Theme, and About menus."""
+        self._app_color_scheme = read_saved_color_scheme()
+
         menubar = self.menuBar()
 
         file_menu = menubar.addMenu("File")
@@ -42,6 +51,26 @@ class MainWindowSessionMixin(_MainWindowBase):
         self._load_recent_menu.aboutToShow.connect(self._populate_load_recent_menu)
         file_menu.addMenu(self._load_recent_menu)
 
+        theme_menu = menubar.addMenu("Theme")
+        self._theme_action_group = QActionGroup(self)
+        self._theme_action_group.setExclusive(True)
+        self._theme_actions: dict[str, QAction] = {}
+        for label, mode in (
+            ("System", "system"),
+            ("Light", "light"),
+            ("Dark", "dark"),
+        ):
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setData(mode)
+            self._theme_action_group.addAction(act)
+            theme_menu.addAction(act)
+            self._theme_actions[mode] = act
+            act.triggered.connect(
+                lambda checked=False, m=mode: self._on_theme_selected(m)
+            )
+        self._sync_theme_menu_checks()
+
         about_menu = menubar.addMenu("About")
 
         about_action = about_menu.addAction("About Red Dust Control Center")
@@ -49,6 +78,33 @@ class MainWindowSessionMixin(_MainWindowBase):
 
     def _session_qsettings(self) -> QSettings:
         return QSettings(QSETTINGS_ORGANIZATION, QSETTINGS_APPLICATION)
+
+    def _sync_theme_menu_checks(self) -> None:
+        mode = getattr(self, "_app_color_scheme", read_saved_color_scheme())
+        for m, act in self._theme_actions.items():
+            act.setChecked(m == mode)
+
+    def _on_theme_selected(self, mode: str) -> None:
+        mode = normalize_color_scheme(mode)
+        app = QApplication.instance()
+        if app:
+            apply_app_color_scheme(app, mode)
+        write_saved_color_scheme(mode)
+        self._app_color_scheme = mode
+        self._sync_theme_menu_checks()
+
+    def _apply_session_theme_if_present(self, state: dict) -> None:
+        """Apply ``app_color_scheme`` from a loaded session and persist to QSettings."""
+        raw = state.get("app_color_scheme")
+        if raw is None:
+            return
+        mode = normalize_color_scheme(str(raw))
+        app = QApplication.instance()
+        if app:
+            apply_app_color_scheme(app, mode)
+        write_saved_color_scheme(mode)
+        self._app_color_scheme = mode
+        self._sync_theme_menu_checks()
 
     def _read_recent_session_paths(self) -> list[str]:
         """Paths from last successful File > Load / Save, most recent first."""
@@ -160,6 +216,9 @@ class MainWindowSessionMixin(_MainWindowBase):
                 self.osc_manager,
                 self.data_picker,
                 self.object_cards,
+                app_color_scheme=getattr(
+                    self, "_app_color_scheme", read_saved_color_scheme()
+                ),
             )
 
             self.session_manager.save_session(file_path, state)
@@ -195,6 +254,8 @@ class MainWindowSessionMixin(_MainWindowBase):
         """Load application state from file."""
         try:
             state = self.session_manager.load_session(file_path)
+
+            self._apply_session_theme_if_present(state)
 
             self.pending_session_state = state
 

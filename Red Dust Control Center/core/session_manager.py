@@ -87,6 +87,7 @@ class SessionManager:
         osc_manager,
         data_picker=None,
         object_cards=None,
+        app_color_scheme: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create state dictionary from current application state.
@@ -97,12 +98,17 @@ class SessionManager:
             playback_controller: PlaybackController instance
             osc_manager: OSCManager instance
             data_picker: DataPicker instance (optional)
-        
+            object_cards: Object cards container (optional)
+            app_color_scheme: ``system`` | ``light`` | ``dark`` for session JSON (optional)
+
         Returns:
             State dictionary
         """
         state = {}
-        
+
+        if app_color_scheme is not None:
+            state["app_color_scheme"] = str(app_color_scheme).strip().lower()
+
         # Data picker selection (network, station, year, doy)
         if data_picker:
             selection = data_picker.get_selection()

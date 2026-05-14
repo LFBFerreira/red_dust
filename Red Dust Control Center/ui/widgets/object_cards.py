@@ -817,18 +817,52 @@ class ObjectCardsContainer(QFrame):
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabsClosable(True)
         self.tab_widget.tabCloseRequested.connect(self._on_tab_close_requested)
-        self.tab_widget.setStyleSheet(
-            """
-            QTabBar::tab:selected {
-                font-weight: bold;
-                font-size: 1.09em;
-            }
-        """
-        )
+        self.tab_widget.setAutoFillBackground(True)
+        self._refresh_interactive_objects_tab_style()
         layout.addWidget(self.tab_widget)
 
         self.setFixedHeight(INTERACTIVE_OBJECTS_HEIGHT)
         self.setLayout(layout)
+
+    @staticmethod
+    def _interactive_objects_tab_stylesheet() -> str:
+        """QSS tied to the application palette so tabs track light/dark theme switches."""
+        return """
+            QTabWidget::pane {
+                border: 1px solid palette(mid);
+                background: palette(window);
+            }
+            QTabBar::tab {
+                background: palette(button);
+                color: palette(button-text);
+                padding: 5px 12px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background: palette(window);
+                color: palette(window-text);
+                font-weight: bold;
+                font-size: 1.09em;
+            }
+            QTabBar::tab:hover:!selected {
+                background: palette(alternate-base);
+            }
+        """
+
+    def _refresh_interactive_objects_tab_style(self) -> None:
+        if not hasattr(self, "tab_widget"):
+            return
+        self.tab_widget.setStyleSheet(self._interactive_objects_tab_stylesheet())
+        self.tab_widget.update()
+
+    def changeEvent(self, event: QEvent) -> None:
+        _et = event.type()
+        _refresh_types = {QEvent.Type.PaletteChange, QEvent.Type.StyleChange}
+        if hasattr(QEvent.Type, "ApplicationPaletteChange"):
+            _refresh_types.add(QEvent.Type.ApplicationPaletteChange)
+        if _et in _refresh_types:
+            self._refresh_interactive_objects_tab_style()
+        super().changeEvent(event)
 
     def _on_tab_close_requested(self, index: int) -> None:
         card = self.tab_widget.widget(index)
