@@ -3,6 +3,7 @@
 import logging
 from pathlib import Path
 
+from obspy import UTCDateTime
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QMenu
 
@@ -244,6 +245,13 @@ class MainWindowSessionMixin(_MainWindowBase):
 
     def _restore_session_state_after_load(self, state: dict):
         """Restore session state that depends on data being loaded."""
+        if "scaling" in state and self.waveform_model:
+            sc = state["scaling"]
+            if isinstance(sc, dict):
+                lo = float(sc.get("lo_percentile", 1.0))
+                hi = float(sc.get("hi_percentile", 99.0))
+                self.waveform_model.update_scaling(lo, hi)
+
         if "selected_channels" in state and self.waveform_model:
             raw_sel = state["selected_channels"]
             if not isinstance(raw_sel, list):
@@ -261,12 +269,6 @@ class MainWindowSessionMixin(_MainWindowBase):
             self._update_metadata()
             self._update_object_card_channels()
             self._sync_interactive_objects_to_playback_channels(set(sel))
-            tr = self.waveform_model.get_time_range()
-            ct = self.playback_controller.get_current_timestamp()
-            if tr and ct is not None:
-                self.playback_controls.update_position_slider(ct, tr[0], tr[1])
-                self.playback_controls.update_time_display(ct, tr[0], tr[1])
-            self._refresh_value_display()
 
         if "playback" in state:
             playback_state = state["playback"]
@@ -277,25 +279,70 @@ class MainWindowSessionMixin(_MainWindowBase):
                     self.playback_controls.set_speed(speed)
                 self.playback_controller.set_speed(speed)
 
-            if "loop_start" in playback_state and "loop_end" in playback_state:
-                loop_start = playback_state["loop_start"]
-                loop_end = playback_state["loop_end"]
-                if loop_start and loop_end:
-                    try:
-                        self.playback_controller.set_loop_range(loop_start, loop_end)
-                        loop_enabled = playback_state.get("loop_enabled", False)
-                        self.playback_controller.enable_loop(loop_enabled)
-                        if self.playback_controls:
-                            self.playback_controls.set_loop_enabled(loop_enabled)
-                            self.playback_controls.update_loop_display(
-                                loop_start, loop_end
-                            )
-                        if self.waveform_viewer:
-                            self.waveform_viewer.set_loop_range(loop_start, loop_end)
-                    except Exception as e:
-                        logger.warning("Failed to restore loop range: %s", e)
-            elif self.playback_controls:
+            loop_start = playback_state.get("loop_start")
+            loop_end = playback_state.get("loop_end")
+            if loop_start and loop_end:
+                try:
+                    self.playback_controller.set_loop_range(loop_start, loop_end)
+                    loop_enabled = playback_state.get("loop_enabled", False)
+                    self.playback_controller.enable_loop(loop_enabled)
+                    if self.playback_controls:
+                        self.playback_controls.set_loop_enabled(loop_enabled)
+                        self.playback_controls.update_loop_display(loop_start, loop_end)
+                    if self.waveform_viewer:
+                        self.waveform_viewer.set_loop_range(loop_start, loop_end)
+                except Exception as e:
+                    logger.warning("Failed to restore loop range: %s", e)
+                    self.playback_controller.clear_loop()
+                    if self.playback_controls:
+                        self.playback_controls.set_loop_enabled(False)
+                    if self.waveform_viewer:
+                        self.waveform_viewer.set_loop_range(None, None)
+            else:
+                self.playback_controller.clear_loop()
+                if self.playback_controls:
+                    self.playback_controls.set_loop_enabled(False)
+                if self.waveform_viewer:
+                    self.waveform_viewer.set_loop_range(None, None)
+
+            saved_ct = playback_state.get("current_time")
+            tr = self.waveform_model.get_time_range() if self.waveform_model else None
+            sel = (
+                self.waveform_model.get_selected_channels()
+                if self.waveform_model
+                else []
+            )
+            if tr and sel and saved_ct is not None:
+                try:
+                    ts = (
+                        saved_ct
+                        if isinstance(saved_ct, UTCDateTime)
+                        else UTCDateTime(saved_ct)
+                    )
+                    self.playback_controller.seek(ts)
+                except Exception as e:
+                    logger.warning("Failed to restore playhead time: %s", e)
+        else:
+            self.playback_controller.clear_loop()
+            if self.playback_controls:
                 self.playback_controls.set_loop_enabled(False)
+            if self.waveform_viewer:
+                self.waveform_viewer.set_loop_range(None, None)
+
+        tr = (
+            self.waveform_model.get_time_range() if self.waveform_model else None
+        )
+        ct = (
+            self.playback_controller.get_current_timestamp()
+            if self.playback_controller
+            else None
+        )
+        if tr and ct is not None and self.playback_controls:
+            self.playback_controls.update_position_slider(ct, tr[0], tr[1])
+            self.playback_controls.update_time_display(ct, tr[0], tr[1])
+        if self.waveform_viewer and ct is not None:
+            self.waveform_viewer.update_playhead(ct)
+        self._refresh_value_display()
 
     def _on_about(self):
         """Handle About menu action."""

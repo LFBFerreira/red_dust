@@ -197,6 +197,10 @@ class WaveformModel:
             self._normalization_max,
         )
 
+    def get_scaling_percentiles(self) -> Tuple[float, float]:
+        """Return (low, high) percentile used for normalization (P1–P99 style)."""
+        return (self._lo_percentile, self._hi_percentile)
+
     def update_scaling(self, lo_percentile: float, hi_percentile: float) -> None:
         if lo_percentile < 0 or hi_percentile > 100 or lo_percentile >= hi_percentile:
             logger.warning("Invalid percentile range: %s-%s", lo_percentile, hi_percentile)

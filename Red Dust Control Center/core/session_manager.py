@@ -126,13 +126,10 @@ class SessionManager:
         
         if waveform_model:
             state['selected_channels'] = waveform_model.get_selected_channels()
-            
-            # Scaling settings
-            # Note: We don't store the percentile values directly, but we could
-            # For now, store the normalization range
+            lo_p, hi_p = waveform_model.get_scaling_percentiles()
             state['scaling'] = {
-                'lo_percentile': 1.0,  # Default, would need to be stored in model
-                'hi_percentile': 99.0
+                'lo_percentile': lo_p,
+                'hi_percentile': hi_p,
             }
         
         # Playback settings
@@ -141,7 +138,10 @@ class SessionManager:
                 'speed': playback_controller.get_speed(),
                 'loop_enabled': playback_controller.is_loop_enabled(),
             }
-            
+            ct = playback_controller.get_current_timestamp()
+            if ct is not None:
+                state['playback']['current_time'] = ct
+
             loop_range = playback_controller.get_loop_range()
             if loop_range:
                 state['playback']['loop_start'] = loop_range[0]
@@ -189,7 +189,7 @@ class SessionManager:
         """Convert ISO8601 strings back to UTCDateTime where appropriate."""
         if isinstance(obj, dict):
             # Check for timestamp-like keys
-            timestamp_keys = ['loop_start', 'loop_end']
+            timestamp_keys = ('loop_start', 'loop_end', 'current_time')
             result = {}
             for k, v in obj.items():
                 if k in timestamp_keys and isinstance(v, str):

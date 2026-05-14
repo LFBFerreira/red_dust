@@ -196,7 +196,14 @@ class PlaybackController(QObject):
     def is_loop_enabled(self) -> bool:
         """Check if looping is enabled."""
         return self._loop_enabled
-    
+
+    def clear_loop(self) -> None:
+        """Disable looping and discard loop endpoints (e.g. when loading a session without a loop)."""
+        self._loop_enabled = False
+        self._loop_start = None
+        self._loop_end = None
+        logger.info("Loop range cleared")
+
     def get_current_timestamp(self) -> Optional[UTCDateTime]:
         """
         Get current playhead timestamp.
