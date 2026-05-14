@@ -12,7 +12,8 @@ from typing import Dict, Sequence
 
 from settings import MAX_SELECTED_CHANNELS
 
-# Fixed ordered palette (length must equal MAX_SELECTED_CHANNELS).
+# Fixed ordered palette (must have at least MAX_SELECTED_CHANNELS entries; extra
+# colors are still used via modulo when the max selection limit is raised).
 CHANNEL_TRACE_COLORS = [
     "#00d4ff",
     "#ff7f0e",
@@ -36,7 +37,10 @@ CHANNEL_TRACE_COLORS = [
     "#ad494a",
 ]
 
-assert len(CHANNEL_TRACE_COLORS) == MAX_SELECTED_CHANNELS
+assert len(CHANNEL_TRACE_COLORS) >= MAX_SELECTED_CHANNELS, (
+    f"CHANNEL_TRACE_COLORS ({len(CHANNEL_TRACE_COLORS)}) must be at least "
+    f"MAX_SELECTED_CHANNELS ({MAX_SELECTED_CHANNELS})"
+)
 
 FALLBACK_TRACE_COLOR = "#666666"
 

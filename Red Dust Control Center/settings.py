@@ -20,7 +20,8 @@ AVAILABLE_STATIONS = ["ELYSE", "ELYS0", "ELYHK", "ELYH0"]
 
 # --- Playback & channel selection ---
 
-# Max simultaneous waveform channel selections (matches trace color palette size)
+# Max simultaneous waveform channel selections (must be <= len(CHANNEL_TRACE_COLORS)
+# in ui/widgets/channel_colors.py; extra palette colors are unused until you raise this).
 MAX_SELECTED_CHANNELS = 5
 
 
