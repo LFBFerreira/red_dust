@@ -33,7 +33,7 @@ WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default waveform viewer width (pixels)
 MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL = 8000
 
 # Application color scheme: default when QSettings has no value yet; Theme menu
-# overrides at runtime and is persisted under QSettings key ``app_color_scheme``.
+# overrides at runtime (``system`` = native Qt style; ``light``/``dark`` = Fusion).
 APP_COLOR_SCHEME = "system"
 
 

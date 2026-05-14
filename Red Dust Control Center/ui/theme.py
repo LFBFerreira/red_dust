@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 _VALID_SCHEMES = frozenset({"system", "light", "dark"})
 THEME_QSETTINGS_KEY = "app_color_scheme"
 
+# Last mode we applied (None = startup, before any theme call — matches plain QApplication).
+_last_applied_theme_mode: Optional[str] = None
+
 
 def normalize_color_scheme(mode: Optional[str]) -> str:
     m = (mode or "").strip().lower()
@@ -57,6 +60,16 @@ def _apply_fusion_dark_palette(app: QApplication) -> None:
     app.setPalette(p)
 
 
+def _unset_app_color_scheme_override(hints) -> None:
+    if hasattr(hints, "unsetColorScheme"):
+        hints.unsetColorScheme()
+    elif hasattr(hints, "setColorScheme") and hasattr(Qt, "ColorScheme"):
+        try:
+            hints.setColorScheme(Qt.ColorScheme.Unknown)
+        except (TypeError, AttributeError):
+            pass
+
+
 def _refresh_theme_sensitive_widgets(app: QApplication) -> None:
     """Widgets whose QSS must be reapplied after global palette / style changes."""
     for top in app.topLevelWidgets():
@@ -68,24 +81,33 @@ def _refresh_theme_sensitive_widgets(app: QApplication) -> None:
 def apply_app_color_scheme(app: QApplication, mode: Optional[str] = None) -> str:
     """
     Apply ``mode`` (``system`` / ``light`` / ``dark``). If ``mode`` is None, use QSettings
-    or ``settings.APP_COLOR_SCHEME``. Returns the normalized mode that was applied.
+    or ``settings.APP_COLOR_SCHEME``.
+
+    ``system``: matches a plain Qt startup when already on system — no palette/style
+    overrides. Only when switching *from* Light/Dark do we clear Fusion, app palette,
+    and color-scheme hints so the native style can show again.
+
+    ``light`` / ``dark``: Fusion style with forced light or dark appearance.
+    Returns the normalized mode that was applied.
     """
+    global _last_applied_theme_mode
+
     if mode is None:
         mode = read_saved_color_scheme()
     else:
         mode = normalize_color_scheme(mode)
 
+    prev = _last_applied_theme_mode
     hints = app.styleHints()
 
     try:
         if mode == "system":
-            if hasattr(hints, "unsetColorScheme"):
-                hints.unsetColorScheme()
-            elif hasattr(hints, "setColorScheme") and hasattr(Qt, "ColorScheme"):
-                try:
-                    hints.setColorScheme(Qt.ColorScheme.Unknown)
-                except (TypeError, AttributeError):
-                    pass
+            if prev in ("light", "dark"):
+                _unset_app_color_scheme_override(hints)
+                app.setStyle(None)
+                app.setPalette(QPalette())
+            # First startup (prev is None) or System→System: do not touch style/palette
+            # or style hints — same as before any theme code existed.
             return mode
 
         app.setStyle("Fusion")
@@ -108,3 +130,4 @@ def apply_app_color_scheme(app: QApplication, mode: Optional[str] = None) -> str
         return mode
     finally:
         _refresh_theme_sensitive_widgets(app)
+        _last_applied_theme_mode = mode
