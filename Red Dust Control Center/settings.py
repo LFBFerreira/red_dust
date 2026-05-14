@@ -21,7 +21,7 @@ AVAILABLE_STATIONS = ["ELYSE", "ELYS0", "ELYHK", "ELYH0"]
 # --- Playback & channel selection ---
 
 # Max simultaneous waveform channel selections (matches trace color palette size)
-MAX_SELECTED_CHANNELS = 20
+MAX_SELECTED_CHANNELS = 5
 
 
 # --- UI: main window layout ---
@@ -30,6 +30,10 @@ LEFT_PANEL_WIDTH = 250  # Dataset Information and Data Picker panels (pixels)
 WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default waveform viewer width (pixels)
 # Cap points sent to pyqtgraph per channel (display only; stream / cache stay full rate).
 MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL = 8000
+
+# Application color scheme: "system" (follow OS / Qt), "light", or "dark".
+# Forced light/dark uses the Fusion style on most platforms for consistent results.
+APP_COLOR_SCHEME = "system"
 
 
 # --- UI: interactive object cards ---
