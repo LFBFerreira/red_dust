@@ -2,16 +2,17 @@
 Abstract base class for interactive objects supporting different communication protocols.
 
 Multi-pin streaming: each object has an ordered list of PinStreamRow entries.
-Per tick, normalized values (0..1) are remapped (clamped to [0, 1] on the wire)
-as one float per physical pin slot (indices 0..N-1 = Pin_A..). Unassigned slots
+Per tick, normalized values (0..1) are multiplied by per-row scale, clamped to
+per-row min/max, then clamped to [0, 1] on the wire as one float per physical
+pin slot (indices 0..N-1 = Pin_A..). Unassigned slots
 send ``settings.WIRE_INACTIVE_PIN_SENTINEL`` (outside [0, 1]); firmware ignores those.
 Plus one ISO8601 UTC timestamp string.
 
 Firmware contract: OSC message at base address, typetag (f * N)(s); Serial line
 v1,...,vN,timestamp\\n — see core/osc_object.py and core/serial_object.py.
 
-Pin rows are edited in the object card table (ui.widgets.object_cards): columns
-start equal width and can be resized by dragging header separators.
+Pin rows are edited in the object card table (ui.widgets.object_cards); column
+widths track the available table width as the window is resized.
 """
 from __future__ import annotations
 
@@ -65,7 +66,9 @@ class InteractiveObject(ABC):
 
     @staticmethod
     def remap_for_row(normalized_value: float, row: PinStreamRow) -> float:
-        return remap_normalized(normalized_value, row.remap_min, row.remap_max)
+        return remap_normalized(
+            normalized_value, row.remap_min, row.remap_max, row.remap_scale
+        )
 
     @abstractmethod
     def send_pin_bundle(

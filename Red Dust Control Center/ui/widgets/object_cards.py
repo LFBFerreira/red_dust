@@ -7,8 +7,8 @@ import logging
 import uuid
 from typing import Callable, Dict, List, Optional, Set
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap, QShowEvent
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from core.pin_stream import (
     PinStreamRow,
     pin_rows_to_dicts,
+    remap_normalized,
 )
 from .channel_colors import color_for_channel
 from settings import (
@@ -90,7 +91,10 @@ class ObjectCard(QWidget):
         self._active_channel: Optional[str] = None
         self._serial_connected = False
         self._osc_endpoint_debounce_timer: Optional[QTimer] = None
-        self._pin_table_columns_equalized = False
+        self._pin_column_layout_timer = QTimer(self)
+        self._pin_column_layout_timer.setSingleShot(True)
+        self._pin_column_layout_timer.setInterval(0)
+        self._pin_column_layout_timer.timeout.connect(self._equalize_pin_table_column_widths)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -114,7 +118,7 @@ class ObjectCard(QWidget):
 
         if self._communication_type == "OSC":
             addr_row = QHBoxLayout()
-            addr_row.addWidget(QLabel("Base address:"))
+            addr_row.addWidget(QLabel("OSC path:"))
             self.address_edit = QLineEdit()
             self.address_edit.setText(
                 f"/red_dust/{self._display_title.lower().replace(' ', '_')}"
@@ -177,9 +181,9 @@ class ObjectCard(QWidget):
         add_row.addStretch()
         right.addLayout(add_row)
 
-        self.pin_table = QTableWidget(0, 6)
+        self.pin_table = QTableWidget(0, 7)
         self.pin_table.setHorizontalHeaderLabels(
-            ["Slot", "Channel", "Min", "Max", "Value", ""]
+            ["Slot", "Channel", "Min", "Max", "Scale", "Value", ""]
         )
         hdr = self.pin_table.horizontalHeader()
         hdr.setStretchLastSection(False)
@@ -187,6 +191,7 @@ class ObjectCard(QWidget):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
         self.pin_table.verticalHeader().setVisible(False)
         right.addWidget(self.pin_table, 1)
+        self.pin_table.viewport().installEventFilter(self)
 
         right_wrap = QWidget()
         right_wrap.setLayout(right)
@@ -195,45 +200,57 @@ class ObjectCard(QWidget):
         splitter.addWidget(left_wrap)
         splitter.addWidget(right_wrap)
         splitter.setStretchFactor(1, 1)
+        splitter.splitterMoved.connect(self._schedule_equalize_pin_table_column_widths)
         main.addWidget(splitter)
         self.setLayout(main)
         self._update_add_button_state()
         self._update_stream_button()
+        self._schedule_equalize_pin_table_column_widths()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            event.type() == QEvent.Type.Resize
+            and watched is self.pin_table.viewport()
+        ):
+            self._schedule_equalize_pin_table_column_widths()
+        return super().eventFilter(watched, event)
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
-        if self._pin_table_columns_equalized:
-            return
-        QTimer.singleShot(0, self._deferred_equalize_pin_columns_once)
+        self._schedule_equalize_pin_table_column_widths()
 
-    def _deferred_equalize_pin_columns_once(self, attempt: int = 0) -> None:
-        if self._pin_table_columns_equalized:
-            return
-        vw = self.pin_table.viewport().width()
-        if vw < 80 and attempt < 25:
-            QTimer.singleShot(
-                50, lambda: self._deferred_equalize_pin_columns_once(attempt + 1)
-            )
-            return
-        if vw >= 80:
-            self._equalize_pin_table_column_widths()
-        self._pin_table_columns_equalized = True
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._schedule_equalize_pin_table_column_widths()
+
+    def _schedule_equalize_pin_table_column_widths(self) -> None:
+        """Run column layout after the current event batch (viewport size is then reliable)."""
+        self._pin_column_layout_timer.start()
 
     def _equalize_pin_table_column_widths(self) -> None:
-        """Split viewport width evenly across pin table columns (one-time after first show)."""
+        """Distribute column widths to match the viewport (header and body stay aligned)."""
         tbl = self.pin_table
-        vw = tbl.viewport().width()
-        n = tbl.columnCount()
-        if vw < 1 or n <= 0:
-            return
         hdr = tbl.horizontalHeader()
-        base = max(48, vw // n)
+        n = tbl.columnCount()
+        if n <= 0:
+            return
         hdr.blockSignals(True)
-        for c in range(n - 1):
-            hdr.resizeSection(c, base)
-        last_w = max(48, vw - base * (n - 1))
-        hdr.resizeSection(n - 1, last_w)
-        hdr.blockSignals(False)
+        try:
+            # Two passes: a vertical scrollbar can appear after the first pass and
+            # narrow the viewport; without a second pass, column sum > viewport causes
+            # horizontal scroll and header/body misalignment.
+            for _ in range(2):
+                vw = tbl.viewport().width()
+                if vw < 1:
+                    break
+                base = vw // n
+                rem = vw % n
+                for c in range(n):
+                    w = base + (1 if c < rem else 0)
+                    hdr.resizeSection(c, max(1, w))
+                tbl.updateGeometries()
+        finally:
+            hdr.blockSignals(False)
 
     def _on_title_edited(self, text: str) -> None:
         self._display_title = text
@@ -277,6 +294,7 @@ class ObjectCard(QWidget):
                     "channel_id": ch,
                     "remap_min": 0.0,
                     "remap_max": 1.0,
+                    "remap_scale": 1.0,
                     "slot_index": slot_index,
                 }
             )
@@ -352,9 +370,12 @@ class ObjectCard(QWidget):
             min_spin.setRange(-1e6, 1e6)
             min_spin.setDecimals(3)
             min_spin.setSingleStep(0.05)
+            min_spin.setKeyboardTracking(False)
+            min_spin.blockSignals(True)
             min_spin.setValue(row["remap_min"])
-            min_spin.editingFinished.connect(
-                lambda r=row, s=min_spin: self._on_row_min_changed(r, s)
+            min_spin.blockSignals(False)
+            min_spin.valueChanged.connect(
+                lambda _v, r=row, s=min_spin: self._on_row_min_changed(r, s)
             )
             self.pin_table.setCellWidget(i, 2, min_spin)
 
@@ -362,11 +383,31 @@ class ObjectCard(QWidget):
             max_spin.setRange(-1e6, 1e6)
             max_spin.setDecimals(3)
             max_spin.setSingleStep(0.05)
+            max_spin.setKeyboardTracking(False)
+            max_spin.blockSignals(True)
             max_spin.setValue(row["remap_max"])
-            max_spin.editingFinished.connect(
-                lambda r=row, s=max_spin: self._on_row_max_changed(r, s)
+            max_spin.blockSignals(False)
+            max_spin.valueChanged.connect(
+                lambda _v, r=row, s=max_spin: self._on_row_max_changed(r, s)
             )
             self.pin_table.setCellWidget(i, 3, max_spin)
+
+            scale_spin = QDoubleSpinBox()
+            scale_spin.setRange(0.0, 100.0)
+            scale_spin.setDecimals(3)
+            scale_spin.setSingleStep(0.1)
+            scale_spin.setKeyboardTracking(False)
+            scale_spin.blockSignals(True)
+            scale_spin.setValue(float(row.get("remap_scale", 1.0)))
+            scale_spin.blockSignals(False)
+            scale_spin.setToolTip(
+                "Multiplies the 0..1 channel sample before clamping to Min..Max "
+                "(1 = unchanged amplitude; <1 quieter; >1 louder until capped)."
+            )
+            scale_spin.valueChanged.connect(
+                lambda _v, r=row, s=scale_spin: self._on_row_scale_changed(r, s)
+            )
+            self.pin_table.setCellWidget(i, 4, scale_spin)
 
             bar = QProgressBar()
             bar.setRange(0, 100)
@@ -374,21 +415,24 @@ class ObjectCard(QWidget):
             bar.setFormat("0.000")
             bar.setMinimumHeight(22)
             bar.setMinimumWidth(10)
-            self.pin_table.setCellWidget(i, 4, bar)
+            self.pin_table.setCellWidget(i, 5, bar)
             self._row_progress[row["row_id"]] = bar
 
             rm = QPushButton("Remove")
             rid = row["row_id"]
             rm.clicked.connect(lambda checked=False, x=rid: self._remove_pin_row(x))
-            self.pin_table.setCellWidget(i, 5, rm)
+            self.pin_table.setCellWidget(i, 6, rm)
 
         self._restyle_active_rows()
+        self._schedule_equalize_pin_table_column_widths()
 
     def _on_row_min_changed(self, row: dict, spin: QDoubleSpinBox) -> None:
         lo = spin.value()
         hi = row["remap_max"]
         if lo >= hi:
+            spin.blockSignals(True)
             spin.setValue(row["remap_min"])
+            spin.blockSignals(False)
             return
         row["remap_min"] = lo
         self.config_changed.emit(self._object_id)
@@ -397,9 +441,15 @@ class ObjectCard(QWidget):
         hi = spin.value()
         lo = row["remap_min"]
         if lo >= hi:
+            spin.blockSignals(True)
             spin.setValue(row["remap_max"])
+            spin.blockSignals(False)
             return
         row["remap_max"] = hi
+        self.config_changed.emit(self._object_id)
+
+    def _on_row_scale_changed(self, row: dict, spin: QDoubleSpinBox) -> None:
+        row["remap_scale"] = float(spin.value())
         self.config_changed.emit(self._object_id)
 
     def _remove_pin_row(self, row_id: str) -> None:
@@ -626,14 +676,11 @@ class ObjectCard(QWidget):
             n = max(0.0, min(1.0, normalized_by_row_id[rid]))
             lo = row["remap_min"]
             hi = row["remap_max"]
-            if hi == lo:
-                remapped = lo
-                pct = 50.0
-            else:
-                remapped = lo + n * (hi - lo)
-                pct = n * 100.0
-            bar.setValue(int(pct))
-            bar.setFormat(f"{remapped:.3f}")
+            sc = float(row.get("remap_scale", 1.0))
+            remapped = remap_normalized(n, lo, hi, sc)
+            wire = max(0.0, min(1.0, remapped))
+            bar.setValue(int(wire * 100.0))
+            bar.setFormat(f"{wire:.3f}")
 
     def get_config(self) -> dict:
         config: Dict = {
@@ -693,6 +740,7 @@ class ObjectCard(QWidget):
                         "channel_id": str(pr["channel_id"]),
                         "remap_min": float(pr.get("remap_min", 0.0)),
                         "remap_max": float(pr.get("remap_max", 1.0)),
+                        "remap_scale": float(pr.get("remap_scale", 1.0)),
                         "slot_index": int(pr.get("slot_index", i)),
                     }
                 )
