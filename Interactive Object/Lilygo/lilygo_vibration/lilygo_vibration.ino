@@ -1,5 +1,7 @@
 // Configuration settings
 #include "settings.h"
+#include "i2s_audio.h"
+#include "tactile_output.h"
 
 // TFT Display includes
 #include <TFT_eSPI.h>
@@ -22,12 +24,9 @@ TraceWidget pinTrace0(&gr);
 TraceWidget pinTrace1(&gr);
 TraceWidget pinTrace2(&gr);
 TraceWidget pinTrace3(&gr);
-TraceWidget pinTrace4(&gr);
-TraceWidget* const pinTraces[MAX_PINS] = {
-    &pinTrace0, &pinTrace1, &pinTrace2, &pinTrace3, &pinTrace4};
+TraceWidget* const pinTraces[MAX_PINS] = {&pinTrace0, &pinTrace1, &pinTrace2, &pinTrace3};
 
-static const uint16_t TRACE_COLORS[MAX_PINS] = {
-    TFT_RED, TFT_GREEN, TFT_YELLOW, TFT_CYAN, TFT_MAGENTA};
+static const uint16_t TRACE_COLORS[MAX_PINS] = {TFT_RED, TFT_GREEN, TFT_YELLOW, TFT_CYAN};
 
 // Graph configuration
 const float gxLow = 0.0;
@@ -81,6 +80,81 @@ int mapValueToPWM(float value) {
 }
 
 // Parse a single float token; returns false if token is not a plausible number (use 0.0)
+// Control lines (USB Serial): MODE,TAC | MODE,AUD | FREQ,120
+bool processControlMessage(const String& message) {
+  String msg = message;
+  msg.trim();
+  if (msg.length() == 0) {
+    return false;
+  }
+
+  if (msg.startsWith("MODE,") || msg.startsWith("MODE=")) {
+    int sep = msg.indexOf(',');
+    if (sep < 0) sep = msg.indexOf('=');
+    if (sep > 0 && sep < (int)msg.length() - 1) {
+      String modeStr = msg.substring(sep + 1);
+      modeStr.trim();
+      modeStr.toUpperCase();
+#if ENABLE_I2S_PCM5102
+      if (modeStr == "AUD" || modeStr == "AUDIO") {
+        i2s_audio_set_mode(I2S_MODE_AUDIO);
+        Serial.printf("PCM5102 AUDIO: tone %.1f Hz, Pin_A=L Pin_B=R envelope\n", I2S_CARRIER_HZ);
+      } else if (modeStr == "TAC" || modeStr == "TACTILE") {
+        i2s_audio_set_mode(I2S_MODE_TACTILE);
+        i2s_audio_mute();
+        Serial.println("PCM5102 muted; tactile on MCP4725 (A,B) + PWM+RC (C,D) -> HW-104");
+      } else {
+        Serial.println("Unknown MODE (use TAC or AUD)");
+      }
+#else
+      Serial.println("PCM5102 disabled in settings.h");
+#endif
+    }
+    return true;
+  }
+
+  if (msg.startsWith("FREQ,") || msg.startsWith("FREQ=")) {
+    int sep = msg.indexOf(',');
+    if (sep < 0) sep = msg.indexOf('=');
+    if (sep > 0 && sep < (int)msg.length() - 1) {
+      String fStr = msg.substring(sep + 1);
+      fStr.trim();
+      int hz = fStr.toInt();
+      if (fStr.length() > 0 && hz > 0) {
+#if ENABLE_I2S_PCM5102
+        i2s_audio_set_carrier_hz((float)hz);
+        Serial.printf("PCM5102 tone frequency set to %d Hz\n", hz);
+#else
+        Serial.println("PCM5102 disabled in settings.h");
+#endif
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
+void updateTactileOutputs() {
+#if ENABLE_TACTILE_OUTPUT
+  for (int i = 0; i < MAX_PINS; i++) {
+    tactile_output_set_level(i, latestPinValues[i]);
+  }
+  tactile_output_apply(hasPWMData);
+#endif
+}
+
+void updatePcm5102FromPinValues() {
+#if ENABLE_I2S_PCM5102
+  if (i2s_audio_get_mode() != I2S_MODE_AUDIO) {
+    return;
+  }
+  float left = latestPinValues[I2S_LEFT_PIN_INDEX];
+  float right = latestPinValues[I2S_RIGHT_PIN_INDEX];
+  i2s_audio_set_stereo_levels(left, right);
+#endif
+}
+
 bool parseFloatToken(const String& token, float* out) {
   if (token.length() == 0) {
     *out = 0.0f;
@@ -132,6 +206,9 @@ void applyPinFrame(const float* incoming, int incomingCount, DataSource source) 
   hasPWMData = true;
   latestValue = latestPinValues[0];
 
+  updateTactileOutputs();
+  updatePcm5102FromPinValues();
+
   if (graphInitialized) {
     static int sLastIncomingCount = -1;
     if (sLastIncomingCount >= 0 && incomingCount < sLastIncomingCount) {
@@ -163,6 +240,10 @@ void handleSerialFrame(const float* values, int count, const String& /*timestamp
 
 // Serial line: v1,v2,...,vN,timestamp  (last comma separates timestamp)
 void processSerialMessage(const String& message) {
+  if (processControlMessage(message)) {
+    return;
+  }
+
   int lastComma = message.lastIndexOf(',');
   if (lastComma <= 0 || lastComma >= (int)message.length() - 1) {
     return;
@@ -419,6 +500,17 @@ void updateGui() {
     return;
   }
 
+  float displayValue = constrain(latestValue, 0.0f, 1.0f);
+#if SERIAL_STATUS_DEBUG
+  const char* pcmMode = "PCM-off";
+#if ENABLE_I2S_PCM5102
+  pcmMode = (i2s_audio_get_mode() == I2S_MODE_TACTILE) ? "PCM-mute" : "PCM-AUD";
+#endif
+  Serial.printf("[status] %s | %s | %s | A=%.3f B=%.3f C=%.3f D=%.3f\n", wifiStatusText.c_str(),
+                isReceivingData ? "Active" : "Idle", pcmMode, latestPinValues[0],
+                latestPinValues[1], latestPinValues[2], latestPinValues[3]);
+#endif
+
   tft.setTextFont(2);
   tft.setTextSize(1);
   tft.setTextColor(TFT_WHITE, TFT_BLACK, true);
@@ -438,7 +530,6 @@ void updateGui() {
     tft.print("Idle");
   }
 
-  float displayValue = constrain(latestValue, 0.0f, 1.0f);
   tft.setCursor(190, 5);
   tft.setTextColor(TFT_WHITE, TFT_BLACK, true);
   tft.print(displayValue, 3);
@@ -455,19 +546,26 @@ void updateGui() {
 }
 
 void updateVibrationMotor() {
-  for (int i = 0; i < MAX_PINS; i++) {
-    int duty = hasPWMData ? pwmValues[i] : 0;
-    ledcWrite(OUTPUT_PINS[i], duty);
+  updateTactileOutputs();
+#if ENABLE_I2S_PCM5102
+  if (!hasPWMData) {
+    i2s_audio_mute();
   }
+#endif
 }
 
 void initializeDisplay() {
+  pinMode(4, OUTPUT);
+  digitalWrite(4, HIGH);  // Backlight on first (TTGO T-Display = GPIO 4)
+  Serial.println("Backlight: GPIO 4 HIGH");
+
   tft.init();
   tft.setRotation(3);
+#if DISPLAY_BOOT_TEST
+  tft.fillScreen(TFT_RED);
+  delay(400);  // If you see red briefly, TFT works; if always dark, see README TFT_eSPI setup
+#endif
   tft.fillScreen(TFT_BLACK);
-
-  pinMode(4, OUTPUT);
-  digitalWrite(4, HIGH);
 
   gr.createGraph(220, 100, tft.color565(5, 5, 5));
   gr.setGraphScale(gxLow, gxHigh, gyLow, gyHigh);
@@ -522,13 +620,12 @@ void initializeWiFi() {
   }
 }
 
-void initializeVibrationMotor() {
-  for (int i = 0; i < MAX_PINS; i++) {
-    int pin = OUTPUT_PINS[i];
-    ledcAttach(pin, PWM_FREQUENCY, PWM_RESOLUTION);
-    ledcWrite(pin, 0);
-    Serial.printf("PWM init slot %d GPIO %d\n", i, pin);
+void initializeTactileOutputs() {
+#if ENABLE_TACTILE_OUTPUT
+  if (!tactile_output_begin()) {
+    Serial.println("WARNING: MCP4725 init failed — check I2C wiring and addresses 0x60/0x61");
   }
+#endif
 }
 
 void updateWiFiStatus() {
@@ -552,6 +649,13 @@ void setup() {
   Serial.println("\nRed Dust Interactive Object (multi-pin)");
   Serial.println("Serial: v1[,v2,...],timestamp  (last comma = timestamp; up to MAX_PINS values)");
   Serial.println("OSC: base path + typetag ,f...fs + floats BE + timestamp string");
+#if ENABLE_I2S_AUDIO
+  Serial.println("I2S -> PCM5102: Pin_A=L, Pin_B=R (TACTILE=DC level, AUDIO=tone)");
+  Serial.println("Serial commands: MODE,TAC | MODE,AUD | FREQ,<Hz>");
+#endif
+#if ENABLE_PWM_OUTPUT
+  Serial.println("Motors: Pin_C..E -> PWM GPIOs (see settings.h PWM_OUTPUT_PINS)");
+#endif
   Serial.println("==========================================");
 
   initializeDisplay();
@@ -567,7 +671,14 @@ void setup() {
     latestPinValues[i] = 0.0f;
   }
 
-  initializeVibrationMotor();
+#if ENABLE_I2S_PCM5102
+  if (!i2s_audio_begin()) {
+    Serial.println("WARNING: I2S/PCM5102 init failed — check wiring and pins in settings.h");
+  } else if (i2s_audio_get_mode() == I2S_MODE_TACTILE) {
+    i2s_audio_mute();
+  }
+#endif
+  initializeTactileOutputs();
 }
 
 void loop() {

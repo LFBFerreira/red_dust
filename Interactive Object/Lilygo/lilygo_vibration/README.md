@@ -107,20 +107,49 @@ Arduino IDE includes a specific board definition for the LilyGo T-Display, which
 
 ## How It Works
 
-This firmware drives **up to five PWM outputs** (Pin_A through Pin_E) from **Red Dust Control Center** (RDCC) or compatible senders over **USB Serial** and/or **OSC**.
+This firmware receives **Pin_A … Pin_D** (four normalized levels) from **Red Dust Control Center** (RDCC) over **USB Serial** and/or **OSC**.
 
-### Serial frame (variable pin count)
+### Tactile path (4 transducers → HW-104)
 
-- Format: `v1[,v2,...,vN],timestamp\n`
-- The **last** comma separates the **timestamp** (string) from all numeric fields.
-- Values are applied in order to **Pin_A …** up to **N**, capped at **5**; missing pins are set to **0**.
-- Each value is **clamped to 0..1** before mapping to PWM (0–255 by default).
+| RDCC slot | ESP32 output | To HW-104 |
+|-----------|--------------|-----------|
+| **Pin_A** | **MCP4725** @ `0x60` | Analog in → exciter 1 |
+| **Pin_B** | **MCP4725** @ `0x61` | Analog in → exciter 2 |
+| **Pin_C** | **PWM** GPIO **27** + **RC filter** | Smoothed DC → exciter 3 |
+| **Pin_D** | **PWM** GPIO **32** + **RC filter** | Smoothed DC → exciter 4 |
+
+Use **two HW-104** stereo amplifier modules (4 channels total). Each MCP4725 or PWM+RC output goes to one HW-104 **input** (L or R); speaker outputs drive one transducer each.
+
+**PWM+RC (per channel):** PWM pin → series **1 kΩ** → to amp input; **10 µF** from that node to GND (values are a starting point).
+
+**MCP4725:** Two separate breakout boards — strap **A0** on the second board to **VDD** so its address is **0x61** (first is **0x60**).
+
+### Optional PCM5102 (monitoring / sonification only)
+
+Tactile transducers do **not** use PCM5102. I2S is optional for headphones or a separate listen path.
+
+| Serial command | Effect |
+|----------------|--------|
+| `MODE,AUD` | PCM5102 plays a **tone**; Pin_A / Pin_B = L/R volume |
+| `MODE,TAC` | **Mutes** PCM5102; tactile stays on MCP4725 + PWM |
+| `FREQ,200` | Tone frequency in AUDIO mode |
+
+| PCM5102 label | ESP32 GPIO (`settings.h`) |
+|---------------|-------------------------|
+| BCK | **2** |
+| LRCK | **17** |
+| DIN | **22** |
+
+### Serial frame
+
+- Format: `v1,v2,v3,v4,timestamp\n`
+- Values **0..1** drive tactile outputs; clamped before DAC/PWM.
 
 ### OSC frame (variable pin count)
 
 - Listens on **UDP** `OSC_PORT` for messages whose **path** matches `OSC_PATH` (base address).
 - **Typetag**: `,f...fs` — one or more floats (big-endian), then one OSC **string** (timestamp). RDCC sends the same ordering as Serial.
-- If the sender sends more than five floats, only the first five are used; extra floats are skipped on the wire when decoding.
+- If the sender sends more than four floats, only the first four are used.
 
 ### Display
 
@@ -140,8 +169,11 @@ The `settings.h` file allows you to configure the most important settings for th
   - `OSC_PORT`: UDP port for OSC messages (default: 8000)
 
 - **Hardware Configuration:**
-  - `MAX_PINS`: Maximum outputs (default: 5)
-  - `OUTPUT_PINS[]`: GPIO order Pin_A..Pin_E (default: 25, 26, 27, 32, 33)
+  - `MAX_PINS`: `4` (Pin_A .. Pin_D)
+  - `ENABLE_TACTILE_OUTPUT` / `ENABLE_I2S_PCM5102`
+  - `MCP4725_I2C_ADDR[]`, `I2C_SDA_PIN`, `I2C_SCL_PIN`
+  - `PWM_TACTILE_PINS[]`, `TACTILE_ROUTES[]`
+  - `I2S_*`: PCM5102 pins and AUDIO mode tuning
 
 - **PWM Settings:**
   - `PWM_MIN`: Minimum PWM value - motor off (default: 0)
