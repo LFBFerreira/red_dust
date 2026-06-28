@@ -163,69 +163,69 @@ class PlaybackControls(QWidget):
         self._update_button_states("stopped")
 
         row4 = QHBoxLayout()
-        speed_layout = QHBoxLayout()
-        speed_layout.setContentsMargins(0, 0, 0, 0)
-        speed_layout.addWidget(QLabel("Speed:"))
+        speed_cell = QHBoxLayout()
+        speed_cell.setContentsMargins(0, 0, 0, 0)
+        speed_cell.addWidget(QLabel("Speed:"))
         self.speed_spinbox = QDoubleSpinBox()
         self.speed_spinbox.setRange(0.1, 1000.0)
         self.speed_spinbox.setSingleStep(0.1)
         self.speed_spinbox.setValue(1.0)
         self.speed_spinbox.setDecimals(1)
         self.speed_spinbox.valueChanged.connect(self._on_speed_changed)
-        speed_layout.addWidget(self.speed_spinbox)
-        speed_layout.addWidget(QLabel("x"))
-        speed_layout.addStretch()
-        row4.addLayout(speed_layout, 1)
-
-        row4.addStretch()
-        speed_button_layout = QHBoxLayout()
+        speed_cell.addWidget(self.speed_spinbox)
+        speed_cell.addWidget(QLabel("x"))
         btn_1x = QPushButton("1x")
         btn_1x.clicked.connect(lambda: self._set_speed_preset(1.0))
-        speed_button_layout.addWidget(btn_1x)
+        speed_cell.addWidget(btn_1x)
         btn_10x = QPushButton("10x")
         btn_10x.clicked.connect(lambda: self._set_speed_preset(10.0))
-        speed_button_layout.addWidget(btn_10x)
+        speed_cell.addWidget(btn_10x)
         btn_100x = QPushButton("100x")
         btn_100x.clicked.connect(lambda: self._set_speed_preset(100.0))
-        speed_button_layout.addWidget(btn_100x)
-        row4.addLayout(speed_button_layout, 1)
+        speed_cell.addWidget(btn_100x)
+        speed_cell.addStretch()
+        row4.addLayout(speed_cell, 1)
 
-        row4.addStretch()
+        loop_layout = QHBoxLayout()
+        loop_layout.setContentsMargins(0, 0, 0, 0)
         self.loop_checkbox = QCheckBox("Loop")
         self.loop_checkbox.toggled.connect(self.loop_toggled.emit)
-        row4.addWidget(self.loop_checkbox, 1, Qt.AlignmentFlag.AlignRight)
-
-        layout.addLayout(row4)
-
-        row5 = QHBoxLayout()
-        self.loop_start_button = QPushButton("Loop start")
+        loop_layout.addWidget(self.loop_checkbox)
+        self.loop_start_button = QPushButton("Start")
         self.loop_start_button.setToolTip(
             "Set loop start to the current playhead position"
         )
         self.loop_start_button.clicked.connect(self.capture_loop_start_clicked.emit)
-        row5.addWidget(self.loop_start_button)
+        loop_layout.addWidget(self.loop_start_button)
         self.loop_start_edit = QLineEdit()
         self.loop_start_edit.setPlaceholderText("00:00:00")
         self.loop_start_edit.setToolTip(
             "Loop start as elapsed time (HH:MM:SS) from the beginning of the loaded data"
         )
         self.loop_start_edit.editingFinished.connect(self._on_loop_inputs_edited)
-        row5.addWidget(self.loop_start_edit, 1)
-        self.loop_end_button = QPushButton("Loop end")
+        loop_layout.addWidget(self.loop_start_edit, 1)
+        self.loop_end_button = QPushButton("End")
         self.loop_end_button.setToolTip(
             "Set loop end to the current playhead position"
         )
         self.loop_end_button.clicked.connect(self.capture_loop_end_clicked.emit)
-        row5.addWidget(self.loop_end_button)
+        loop_layout.addWidget(self.loop_end_button)
+        for loop_btn in (self.loop_start_button, self.loop_end_button):
+            loop_btn.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+            )
+            _fm = loop_btn.fontMetrics()
+            loop_btn.setFixedWidth(_fm.horizontalAdvance(loop_btn.text()) + 26)
         self.loop_end_edit = QLineEdit()
         self.loop_end_edit.setPlaceholderText("00:00:00")
         self.loop_end_edit.setToolTip(
             "Loop end as elapsed time (HH:MM:SS) from the beginning of the loaded data"
         )
         self.loop_end_edit.editingFinished.connect(self._on_loop_inputs_edited)
-        row5.addWidget(self.loop_end_edit, 1)
+        loop_layout.addWidget(self.loop_end_edit, 1)
+        row4.addLayout(loop_layout, 1)
 
-        layout.addLayout(row5)
+        layout.addLayout(row4)
         self.setLayout(layout)
 
     def update_time_display(
