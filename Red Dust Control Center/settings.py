@@ -33,8 +33,9 @@ SHOW_WIDGET_DEBUG_BORDERS = True
 # View > View Log (log panel at bottom of main window).
 SHOW_LOG = True
 
-LEFT_PANEL_WIDTH = 250  # Dataset Information and Data Picker panels (pixels)
-WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default waveform viewer width (pixels)
+LEFT_PANEL_WIDTH = 250  # Left column width in top half (Dataset Information, Data Picker)
+DEFAULT_WINDOW_WIDTH = 1100
+DEFAULT_WINDOW_HEIGHT = 800
 # Cap points sent to pyqtgraph per channel (display only; stream / cache stay full rate).
 MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL = 8000
 
@@ -45,7 +46,6 @@ APP_COLOR_SCHEME = "system"
 
 # --- UI: interactive object cards ---
 
-INTERACTIVE_OBJECTS_HEIGHT = 300  # Tab panel height for interactive objects (pixels)
 TAB_ICON_SIZE = 20  # Streaming status icon in object tabs (pixels)
 OBJECT_CARD_LEFT_PANEL_MAX_WIDTH = 300  # OSC/Serial name & connection column (pixels)
 OSC_OBJECT_ENDPOINT_DEBOUNCE_MS = 500  # Apply OSC host/address after typing pauses (avoids DNS per key)

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSplitter,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -34,7 +35,6 @@ from core.pin_stream import (
 )
 from .channel_colors import color_for_channel
 from settings import (
-    INTERACTIVE_OBJECTS_HEIGHT,
     MAX_PIN_SLOTS,
     OBJECT_CARD_LEFT_PANEL_MAX_WIDTH,
     OSC_OBJECT_ENDPOINT_DEBOUNCE_MS,
@@ -821,7 +821,10 @@ class ObjectCardsContainer(QFrame):
         self._refresh_interactive_objects_tab_style()
         layout.addWidget(self.tab_widget)
 
-        self.setFixedHeight(INTERACTIVE_OBJECTS_HEIGHT)
+        sp = self.sizePolicy()
+        sp.setHorizontalPolicy(QSizePolicy.Policy.Expanding)
+        sp.setVerticalPolicy(QSizePolicy.Policy.Expanding)
+        self.setSizePolicy(sp)
         self.setLayout(layout)
 
     @staticmethod

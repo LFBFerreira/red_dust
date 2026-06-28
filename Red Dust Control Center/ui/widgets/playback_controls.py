@@ -226,7 +226,6 @@ class PlaybackControls(QWidget):
         row5.addWidget(self.loop_end_edit, 1)
 
         layout.addLayout(row5)
-        layout.addStretch()
         self.setLayout(layout)
 
     def update_time_display(

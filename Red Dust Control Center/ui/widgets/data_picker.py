@@ -119,7 +119,6 @@ class DataPicker(QWidget):
         progress_layout.addWidget(self.progress_bar)
         layout.addLayout(progress_layout)
         
-        layout.addStretch()
         self.setLayout(layout)
     
     def set_data_manager(self, data_manager) -> None:
