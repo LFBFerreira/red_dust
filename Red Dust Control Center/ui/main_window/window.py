@@ -9,6 +9,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
+    QSizePolicy,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -20,7 +21,17 @@ from core.osc_manager import OSCManager
 from core.playback_controller import PlaybackController
 from core.session_manager import SessionManager
 from core.waveform_model import WaveformModel
-from settings import LEFT_PANEL_WIDTH, WAVEFORM_VIEWER_DEFAULT_WIDTH
+from settings import (
+    INTERACTIVE_OBJECTS_HEIGHT,
+    LEFT_PANEL_WIDTH,
+    WAVEFORM_VIEWER_DEFAULT_WIDTH,
+)
+from ui.view_prefs import read_show_log
+from ui.widget_debug import (
+    apply_widget_debug_borders,
+    iter_widget_debug_targets,
+    read_show_widget_debug_borders,
+)
 from ui.widgets.data_picker import DataPicker
 from ui.widgets.log_viewer import LogHandler, LogViewer
 from ui.widgets.object_cards import ObjectCardsContainer
@@ -67,6 +78,7 @@ class MainWindow(
         self._setup_ui()
         self._setup_logging()
         self._connect_signals()
+        self._apply_widget_debug_borders(read_show_widget_debug_borders())
 
         logger.info("Loading cached metadata...")
         self.data_picker._load_available_years()
@@ -105,6 +117,7 @@ class MainWindow(
         row1_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         metadata_widget = QWidget()
+        self.metadata_widget = metadata_widget
         metadata_widget.setMinimumWidth(LEFT_PANEL_WIDTH)
         metadata_widget.setMaximumWidth(LEFT_PANEL_WIDTH)
         metadata_layout = QVBoxLayout()
@@ -152,9 +165,9 @@ class MainWindow(
                 self.waveform_model.get_all_channels()
             ),
         )
-        main_layout.addWidget(self.object_cards)
+        main_layout.addWidget(self.object_cards, 1)
 
-        log_section = QWidget()
+        self.log_section = QWidget()
         log_layout = QVBoxLayout()
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_layout.setSpacing(4)
@@ -164,8 +177,33 @@ class MainWindow(
         self.log_viewer = LogViewer()
         self.log_viewer.setMaximumHeight(150)
         log_layout.addWidget(self.log_viewer, 1)
-        log_section.setLayout(log_layout)
-        main_layout.addWidget(log_section)
+        self.log_section.setLayout(log_layout)
+        main_layout.addWidget(self.log_section, 0)
+
+        self._apply_log_visibility(read_show_log())
+
+    def _apply_log_visibility(self, visible: bool) -> None:
+        """Show or hide the log panel; ObjectCards expands when log is hidden."""
+        self.log_section.setVisible(visible)
+        if visible:
+            sp = self.object_cards.sizePolicy()
+            sp.setVerticalPolicy(QSizePolicy.Policy.Fixed)
+            self.object_cards.setSizePolicy(sp)
+            self.object_cards.setFixedHeight(INTERACTIVE_OBJECTS_HEIGHT)
+        else:
+            self.object_cards.setMinimumHeight(INTERACTIVE_OBJECTS_HEIGHT)
+            self.object_cards.setMaximumHeight(16777215)
+            sp = self.object_cards.sizePolicy()
+            sp.setVerticalPolicy(QSizePolicy.Policy.Expanding)
+            sp.setVerticalStretch(1)
+            self.object_cards.setSizePolicy(sp)
+
+    def _widget_debug_targets(self) -> dict[str, QWidget]:
+        return dict(iter_widget_debug_targets(self))
+
+    def _apply_widget_debug_borders(self, enabled: bool) -> None:
+        apply_widget_debug_borders(self._widget_debug_targets(), enabled=enabled)
+        self._show_widget_debug_borders = enabled
 
     def _setup_logging(self):
         """Set up logging to both console and UI."""

@@ -27,6 +27,12 @@ MAX_SELECTED_CHANNELS = 5
 
 # --- UI: main window layout ---
 
+# View > Show widget boundaries (debug outlines for ui/widgets components).
+SHOW_WIDGET_DEBUG_BORDERS = True
+
+# View > View Log (log panel at bottom of main window).
+SHOW_LOG = True
+
 LEFT_PANEL_WIDTH = 250  # Dataset Information and Data Picker panels (pixels)
 WAVEFORM_VIEWER_DEFAULT_WIDTH = 300  # Default waveform viewer width (pixels)
 # Cap points sent to pyqtgraph per channel (display only; stream / cache stay full rate).

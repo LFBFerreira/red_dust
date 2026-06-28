@@ -15,6 +15,8 @@ from ui.theme import (
     write_saved_color_scheme,
     normalize_color_scheme,
 )
+from ui.view_prefs import read_show_log, write_show_log
+from ui.widget_debug import read_show_widget_debug_borders, write_show_widget_debug_borders
 
 from .base import _MainWindowBase
 
@@ -71,6 +73,25 @@ class MainWindowSessionMixin(_MainWindowBase):
             )
         self._sync_theme_menu_checks()
 
+        view_menu = menubar.addMenu("View")
+        self._view_log_action = QAction("View Log", self)
+        self._view_log_action.setCheckable(True)
+        self._view_log_action.setChecked(read_show_log())
+        self._view_log_action.triggered.connect(self._on_view_log_toggled)
+        view_menu.addAction(self._view_log_action)
+
+        self._show_widget_boundaries_action = QAction(
+            "Show Widget Boundaries", self
+        )
+        self._show_widget_boundaries_action.setCheckable(True)
+        self._show_widget_boundaries_action.setChecked(
+            read_show_widget_debug_borders()
+        )
+        self._show_widget_boundaries_action.triggered.connect(
+            self._on_widget_boundaries_toggled
+        )
+        view_menu.addAction(self._show_widget_boundaries_action)
+
         about_menu = menubar.addMenu("About")
 
         about_action = about_menu.addAction("About Red Dust Control Center")
@@ -92,6 +113,14 @@ class MainWindowSessionMixin(_MainWindowBase):
         write_saved_color_scheme(mode)
         self._app_color_scheme = mode
         self._sync_theme_menu_checks()
+
+    def _on_view_log_toggled(self, checked: bool) -> None:
+        write_show_log(checked)
+        self._apply_log_visibility(checked)
+
+    def _on_widget_boundaries_toggled(self, checked: bool) -> None:
+        write_show_widget_debug_borders(checked)
+        self._apply_widget_debug_borders(checked)
 
     def _apply_session_theme_if_present(self, state: dict) -> None:
         """Apply ``app_color_scheme`` from a loaded session and persist to QSettings."""
