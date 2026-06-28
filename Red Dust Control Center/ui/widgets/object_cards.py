@@ -799,7 +799,7 @@ class ObjectCardsContainer(QFrame):
         self.setAutoFillBackground(False)
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         header_layout = QHBoxLayout()
         header_layout.addWidget(QLabel("<b>Interactive Objects</b>"))

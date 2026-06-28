@@ -6,7 +6,7 @@ import math
 from typing import List, Optional, Tuple
 
 from obspy import UTCDateTime
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import QEvent, Signal, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -76,6 +76,7 @@ class PlaybackControls(QWidget):
         self._loop_inputs_updating = False
         self._channel_ids: List[str] = []
         self._channel_checks: dict[str, QCheckBox] = {}
+        self._channels_button_accent_color: Optional[str] = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -105,10 +106,10 @@ class PlaybackControls(QWidget):
         _fm = self.clear_channels_button.fontMetrics()
         _x_w = _fm.horizontalAdvance("Clear") + 26
         self.clear_channels_button.setFixedWidth(_x_w)
-        self.clear_channels_button.setStyleSheet("QPushButton { padding: 1px 4px; }")
         self.clear_channels_button.clicked.connect(self._on_clear_all_channels)
         channel_layout.addWidget(self.clear_channels_button)
         channel_layout.addStretch()
+        self._refresh_channel_strip_theme()
         # Stretch 0: channel strip keeps natural width; value/time labels absorb resize.
         row1.addLayout(channel_layout, 0)
 
@@ -227,6 +228,59 @@ class PlaybackControls(QWidget):
 
         layout.addLayout(row4)
         self.setLayout(layout)
+
+    @staticmethod
+    def _channel_menu_stylesheet() -> str:
+        return """
+            QMenu {
+                background-color: palette(window);
+                color: palette(window-text);
+                border: 1px solid palette(mid);
+            }
+        """
+
+    @staticmethod
+    def _clear_button_stylesheet() -> str:
+        return """
+            QPushButton {
+                background-color: palette(button);
+                color: palette(button-text);
+                border: 1px solid palette(mid);
+                padding: 1px 4px;
+            }
+        """
+
+    @staticmethod
+    def _channels_button_stylesheet(accent_color: Optional[str] = None) -> str:
+        text_color = accent_color if accent_color else "palette(button-text)"
+        return f"""
+            QToolButton {{
+                background-color: palette(button);
+                color: {text_color};
+                border: 1px solid palette(mid);
+                padding: 2px 6px;
+            }}
+        """
+
+    def _refresh_channel_strip_theme(self) -> None:
+        """Reapply palette-based QSS after theme / palette changes."""
+        if not hasattr(self, "channels_button"):
+            return
+        self.channels_menu.setStyleSheet(self._channel_menu_stylesheet())
+        self.clear_channels_button.setStyleSheet(self._clear_button_stylesheet())
+        self.channels_button.setStyleSheet(
+            self._channels_button_stylesheet(self._channels_button_accent_color)
+        )
+        selected = [ch for ch in self._channel_ids if self._channel_checks[ch].isChecked()]
+        self._sync_channel_checkbox_colors(selected)
+
+    def changeEvent(self, event: QEvent) -> None:
+        _refresh_types = {QEvent.Type.PaletteChange, QEvent.Type.StyleChange}
+        if hasattr(QEvent.Type, "ApplicationPaletteChange"):
+            _refresh_types.add(QEvent.Type.ApplicationPaletteChange)
+        if event.type() in _refresh_types:
+            self._refresh_channel_strip_theme()
+        super().changeEvent(event)
 
     def update_time_display(
         self,
@@ -566,24 +620,30 @@ class PlaybackControls(QWidget):
         for ch, cb in self._channel_checks.items():
             if ch in sel_set:
                 color = cmap.get(ch, FALLBACK_TRACE_COLOR)
-                cb.setStyleSheet(f"QCheckBox {{ color: {color}; }}")
+                cb.setStyleSheet(
+                    f"QCheckBox {{ color: {color}; background: transparent; }}"
+                )
             else:
-                cb.setStyleSheet("")
+                cb.setStyleSheet(
+                    "QCheckBox { color: palette(window-text); background: transparent; }"
+                )
 
     def _update_channels_button_text(self, selected: List[str]) -> None:
         cmap = channel_color_map(sorted(self._channel_ids))
         n = len(selected)
         if n == 0:
             self.channels_button.setText("Select a channel")
-            self.channels_button.setStyleSheet("")
+            self._channels_button_accent_color = None
         else:
             first = selected[0]
-            color = cmap.get(first, FALLBACK_TRACE_COLOR)
-            self.channels_button.setStyleSheet(f"QToolButton {{ color: {color}; }}")
+            self._channels_button_accent_color = cmap.get(first, FALLBACK_TRACE_COLOR)
             if n == 1:
                 self.channels_button.setText(first)
             else:
                 self.channels_button.setText(f"{first} +{n - 1}")
+        self.channels_button.setStyleSheet(
+            self._channels_button_stylesheet(self._channels_button_accent_color)
+        )
 
     def set_channels(self, channels: list[str]) -> None:
         self.channels_menu.clear()

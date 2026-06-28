@@ -24,7 +24,9 @@ from core.waveform_model import WaveformModel
 from settings import (
     DEFAULT_WINDOW_HEIGHT,
     LEFT_PANEL_WIDTH,
+    WIDGET_PANEL_MARGIN,
 )
+from ui.layout_helpers import wrap_panel
 from ui.view_prefs import (
     default_window_size,
     read_show_log,
@@ -137,7 +139,8 @@ class MainWindow(
 
         main_layout = QVBoxLayout()
         main_layout.setSpacing(0)
-        main_layout.setContentsMargins(6, 6, 6, 6)
+        m = WIDGET_PANEL_MARGIN
+        main_layout.setContentsMargins(m, m, m, m)
         central_widget.setLayout(main_layout)
 
         # --- Top half: left column at LEFT_PANEL_WIDTH, right column fills remainder ---
@@ -148,7 +151,7 @@ class MainWindow(
         left_column.setMinimumWidth(LEFT_PANEL_WIDTH)
         left_column_layout = QVBoxLayout(left_column)
         left_column_layout.setContentsMargins(0, 0, 0, 0)
-        left_column_layout.setSpacing(6)
+        left_column_layout.setSpacing(0)
 
         self.metadata_widget = QWidget()
         metadata_layout = QVBoxLayout()
@@ -168,30 +171,30 @@ class MainWindow(
         metadata_sp = self.metadata_widget.sizePolicy()
         metadata_sp.setVerticalPolicy(QSizePolicy.Policy.Expanding)
         self.metadata_widget.setSizePolicy(metadata_sp)
-        left_column_layout.addWidget(self.metadata_widget, 1)
+        left_column_layout.addWidget(wrap_panel(self.metadata_widget), 1)
 
         self.data_picker = DataPicker(data_manager=self.data_manager)
         picker_sp = self.data_picker.sizePolicy()
         picker_sp.setVerticalPolicy(QSizePolicy.Policy.Fixed)
         self.data_picker.setSizePolicy(picker_sp)
-        left_column_layout.addWidget(self.data_picker, 0)
+        left_column_layout.addWidget(wrap_panel(self.data_picker), 0)
 
         right_column = QWidget()
         right_column_layout = QVBoxLayout(right_column)
         right_column_layout.setContentsMargins(0, 0, 0, 0)
-        right_column_layout.setSpacing(6)
+        right_column_layout.setSpacing(0)
 
         self.waveform_viewer = WaveformViewer()
         waveform_sp = self.waveform_viewer.sizePolicy()
         waveform_sp.setVerticalPolicy(QSizePolicy.Policy.Expanding)
         self.waveform_viewer.setSizePolicy(waveform_sp)
-        right_column_layout.addWidget(self.waveform_viewer, 1)
+        right_column_layout.addWidget(wrap_panel(self.waveform_viewer), 1)
 
         self.playback_controls = PlaybackControls()
         playback_sp = self.playback_controls.sizePolicy()
         playback_sp.setVerticalPolicy(QSizePolicy.Policy.Fixed)
         self.playback_controls.setSizePolicy(playback_sp)
-        right_column_layout.addWidget(self.playback_controls, 0)
+        right_column_layout.addWidget(wrap_panel(self.playback_controls), 0)
 
         self._top_column_splitter.addWidget(left_column)
         self._top_column_splitter.addWidget(right_column)
@@ -213,19 +216,21 @@ class MainWindow(
                 self.waveform_model.get_all_channels()
             ),
         )
-        self._bottom_splitter.addWidget(self.object_cards)
+        self._object_cards_panel = wrap_panel(self.object_cards)
+        self._bottom_splitter.addWidget(self._object_cards_panel)
 
         self.log_section = QWidget()
         log_layout = QVBoxLayout()
         log_layout.setContentsMargins(0, 0, 0, 0)
-        log_layout.setSpacing(4)
+        log_layout.setSpacing(WIDGET_PANEL_MARGIN // 2)
         log_title = QLabel("<b>Log</b>")
         log_title.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         log_layout.addWidget(log_title)
         self.log_viewer = LogViewer()
         log_layout.addWidget(self.log_viewer, 1)
         self.log_section.setLayout(log_layout)
-        self._bottom_splitter.addWidget(self.log_section)
+        self._log_section_panel = wrap_panel(self.log_section)
+        self._bottom_splitter.addWidget(self._log_section_panel)
         self._bottom_splitter.setStretchFactor(0, 3)
         self._bottom_splitter.setStretchFactor(1, 1)
 
@@ -276,7 +281,15 @@ class MainWindow(
 
     def _apply_log_visibility(self, visible: bool) -> None:
         """Show or hide the log panel; ObjectCards fills the bottom half when hidden."""
-        self.log_section.setVisible(visible)
+        if visible:
+            if self._bottom_splitter.indexOf(self._log_section_panel) < 0:
+                self._bottom_splitter.addWidget(self._log_section_panel)
+                self._bottom_splitter.setStretchFactor(0, 3)
+                self._bottom_splitter.setStretchFactor(1, 1)
+            self._log_section_panel.show()
+        else:
+            self._log_section_panel.hide()
+            self._log_section_panel.setParent(None)
 
     def _widget_debug_targets(self) -> dict[str, QWidget]:
         return dict(iter_widget_debug_targets(self))
