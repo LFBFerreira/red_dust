@@ -24,6 +24,9 @@ class DataLoadThread(QThread):
         self.year = year
         self.doy = doy
 
+    def _interrupted(self) -> bool:
+        return self.isInterruptionRequested()
+
     def run(self):
         thread_start = time.time()
         logger.info(
@@ -35,11 +38,18 @@ class DataLoadThread(QThread):
         )
 
         try:
+            if self._interrupted():
+                logger.info("DataLoadThread cancelled before start")
+                return
 
             def progress_callback(downloaded: int, total: int):
+                if self._interrupted():
+                    return
                 self.download_progress.emit(downloaded, total)
 
             def file_count_callback(total: int):
+                if self._interrupted():
+                    return
                 logger.info("Total files to download: %s", total)
                 self.file_count_known.emit(total)
 
@@ -52,20 +62,48 @@ class DataLoadThread(QThread):
                 self.doy,
                 progress_callback=progress_callback,
                 file_count_callback=file_count_callback,
+                cancel_check=self._interrupted,
             )
             fetch_time = time.time() - fetch_start
             logger.info("fetch_and_cache completed in %.2fs", fetch_time)
 
+            if self._interrupted():
+                logger.info("DataLoadThread cancelled after fetch")
+                return
+
             load_start = time.time()
             logger.info("Starting load_from_cache...")
-            stream = self.data_manager.load_from_cache(cache_path)
+            stream = self.data_manager.load_from_cache(
+                cache_path, cancel_check=self._interrupted
+            )
             load_time = time.time() - load_start
             logger.info("load_from_cache completed in %.2fs", load_time)
+
+            if self._interrupted():
+                logger.info("DataLoadThread cancelled after cache load")
+                return
 
             total_time = time.time() - thread_start
             logger.info("DataLoadThread complete in %.2fs total", total_time)
             self.data_loaded.emit(stream)
+        except InterruptedError:
+            logger.info(
+                "DataLoadThread cancelled for %s/%s/%s/%03d",
+                self.network,
+                self.station,
+                self.year,
+                self.doy,
+            )
         except Exception as e:
+            if self._interrupted():
+                logger.info(
+                    "DataLoadThread cancelled during error handling for %s/%s/%s/%03d",
+                    self.network,
+                    self.station,
+                    self.year,
+                    self.doy,
+                )
+                return
             logger.exception(
                 "Error in data load thread for %s/%s/%s/%03d",
                 self.network,

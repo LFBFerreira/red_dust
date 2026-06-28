@@ -349,22 +349,26 @@ class MainWindowSessionMixin(_MainWindowBase):
                     self.playback_controller.enable_loop(loop_enabled)
                     if self.playback_controls:
                         self.playback_controls.set_loop_enabled(loop_enabled)
+                        tr = self.waveform_model.get_time_range()
+                        if tr:
+                            self.playback_controls.set_data_time_range(tr[0], tr[1])
                         self.playback_controls.update_loop_display(loop_start, loop_end)
-                    if self.waveform_viewer:
-                        self.waveform_viewer.set_loop_range(loop_start, loop_end)
+                    self._sync_loop_visualization()
                 except Exception as e:
                     logger.warning("Failed to restore loop range: %s", e)
                     self.playback_controller.clear_loop()
                     if self.playback_controls:
                         self.playback_controls.set_loop_enabled(False)
+                        self.playback_controls.clear_loop_display()
                     if self.waveform_viewer:
-                        self.waveform_viewer.set_loop_range(None, None)
+                        self.waveform_viewer.clear_loop_markers()
             else:
                 self.playback_controller.clear_loop()
                 if self.playback_controls:
                     self.playback_controls.set_loop_enabled(False)
+                    self.playback_controls.clear_loop_display()
                 if self.waveform_viewer:
-                    self.waveform_viewer.set_loop_range(None, None)
+                    self.waveform_viewer.clear_loop_markers()
 
             saved_ct = playback_state.get("current_time")
             tr = self.waveform_model.get_time_range() if self.waveform_model else None
@@ -387,8 +391,9 @@ class MainWindowSessionMixin(_MainWindowBase):
             self.playback_controller.clear_loop()
             if self.playback_controls:
                 self.playback_controls.set_loop_enabled(False)
+                self.playback_controls.clear_loop_display()
             if self.waveform_viewer:
-                self.waveform_viewer.set_loop_range(None, None)
+                self.waveform_viewer.clear_loop_markers()
 
         tr = (
             self.waveform_model.get_time_range() if self.waveform_model else None
@@ -399,6 +404,7 @@ class MainWindowSessionMixin(_MainWindowBase):
             else None
         )
         if tr and ct is not None and self.playback_controls:
+            self.playback_controls.set_data_time_range(tr[0], tr[1])
             self.playback_controls.update_position_slider(ct, tr[0], tr[1])
             self.playback_controls.update_time_display(ct, tr[0], tr[1])
         if self.waveform_viewer and ct is not None:

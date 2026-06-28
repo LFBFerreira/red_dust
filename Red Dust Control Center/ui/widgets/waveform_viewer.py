@@ -11,6 +11,7 @@ import pyqtgraph as pg
 from obspy import Stream, UTCDateTime
 from pyqtgraph import AxisItem
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from settings import MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL
@@ -21,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 _LOG_TAG = "[multi_ch]"
 CHANNEL_LINE_WIDTH = 1
+# Treat loop markers spanning the full sample as "unset" for drawing.
+_LOOP_FULL_RANGE_EPS_S = 1.0
 
 
 def _downsample_for_plot(
@@ -90,6 +93,14 @@ class WaveformViewer(QWidget):
         self._visible_channels: tuple[str, ...] = ()
         self._playhead_line = None
         self._loop_region = None
+        self._loop_start_line = None
+        self._loop_end_line = None
+        self._loop_marker_start: Optional[UTCDateTime] = None
+        self._loop_marker_end: Optional[UTCDateTime] = None
+        self._loop_start_set = False
+        self._loop_end_set = False
+        self._loop_band_enabled = False
+        self._data_x_range: Optional[tuple[float, float]] = None
         self._plot_items: dict[str, object] = {}
         self._channel_data_cache: dict = {}
         self._overall_x_range = None
@@ -202,9 +213,11 @@ class WaveformViewer(QWidget):
         if all_x_mins and all_x_maxs and all_y_mins and all_y_maxs:
             self._overall_x_range = (min(all_x_mins), max(all_x_maxs))
             self._overall_y_range = (min(all_y_mins), max(all_y_maxs))
+            self._data_x_range = self._overall_x_range
         else:
             self._overall_x_range = None
             self._overall_y_range = None
+            self._data_x_range = None
 
         logger.info(
             "%s pre-calc done channels=%s in %.2fs cache_keys=%s",
@@ -243,6 +256,7 @@ class WaveformViewer(QWidget):
         if stream_changed:
             logger.debug("%s stream_changed -> precalc", _LOG_TAG)
             self._precalculate_channel_data(stream)
+            self.clear_loop_markers()
 
         self._stream = stream
 
@@ -251,6 +265,8 @@ class WaveformViewer(QWidget):
         self._plot_items.clear()
         self._playhead_line = None
         self._loop_region = None
+        self._loop_start_line = None
+        self._loop_end_line = None
         logger.debug("%s plot clear %.3fs", _LOG_TAG, time.time() - t0)
 
         if stream is None or len(stream) == 0 or len(self._channel_data_cache) == 0:
@@ -337,6 +353,7 @@ class WaveformViewer(QWidget):
                 pen=pg.mkPen(color="r", width=2, style=Qt.PenStyle.DashLine),
             )
             self.plot_widget.addItem(self._playhead_line)
+            self._refresh_loop_visualization()
         else:
             if self._overall_x_range is not None and self._overall_y_range is not None:
                 x_margin = (self._overall_x_range[1] - self._overall_x_range[0]) * 0.01
@@ -367,19 +384,116 @@ class WaveformViewer(QWidget):
         if self._playhead_line is not None:
             self._playhead_line.setValue(timestamp.timestamp)
 
+    def _markers_are_full_duration(self, t0: float, t1: float) -> bool:
+        if self._data_x_range is None:
+            return False
+        data_start, data_end = self._data_x_range
+        return (
+            abs(t0 - data_start) <= _LOOP_FULL_RANGE_EPS_S
+            and abs(t1 - data_end) <= _LOOP_FULL_RANGE_EPS_S
+        )
+
+    def _remove_loop_items(self) -> None:
+        for item in (self._loop_region, self._loop_start_line, self._loop_end_line):
+            if item is not None:
+                self.plot_widget.removeItem(item)
+        self._loop_region = None
+        self._loop_start_line = None
+        self._loop_end_line = None
+
+    def _refresh_loop_visualization(self) -> None:
+        """Draw loop markers; shaded band only when looping is enabled."""
+        self._remove_loop_items()
+
+        draw_start = self._loop_start_set and self._loop_marker_start is not None
+        draw_end = self._loop_end_set and self._loop_marker_end is not None
+        if not draw_start and not draw_end:
+            return
+
+        t0 = float(self._loop_marker_start.timestamp) if draw_start else None
+        t1 = float(self._loop_marker_end.timestamp) if draw_end else None
+
+        if draw_start and draw_end and t0 is not None and t1 is not None:
+            if t1 < t0:
+                t0, t1 = t1, t0
+            if self._markers_are_full_duration(t0, t1) or t1 <= t0 + _LOOP_FULL_RANGE_EPS_S:
+                return
+
+        loop_pen = pg.mkPen(
+            color=QColor(255, 152, 0, 110),
+            width=2,
+            style=Qt.PenStyle.DashLine,
+        )
+
+        if draw_start and t0 is not None:
+            self._loop_start_line = pg.InfiniteLine(pos=t0, angle=90, pen=loop_pen)
+            self._loop_start_line.setZValue(1)
+            self.plot_widget.addItem(self._loop_start_line)
+
+        if draw_end and t1 is not None:
+            self._loop_end_line = pg.InfiniteLine(pos=t1, angle=90, pen=loop_pen)
+            self._loop_end_line.setZValue(1)
+            self.plot_widget.addItem(self._loop_end_line)
+
+        show_band = (
+            self._loop_band_enabled
+            and draw_start
+            and draw_end
+            and t0 is not None
+            and t1 is not None
+            and t1 > t0 + _LOOP_FULL_RANGE_EPS_S
+            and not self._markers_are_full_duration(t0, t1)
+        )
+        if show_band:
+            self._loop_region = pg.LinearRegionItem(
+                values=[t0, t1],
+                brush=pg.mkBrush(255, 193, 7, 28),
+                pen=loop_pen,
+                movable=False,
+            )
+            self._loop_region.setZValue(-10)
+            self.plot_widget.addItem(self._loop_region)
+
+    def clear_loop_markers(self) -> None:
+        """Remove all loop markers and shaded band."""
+        self._loop_marker_start = None
+        self._loop_marker_end = None
+        self._loop_start_set = False
+        self._loop_end_set = False
+        self._loop_band_enabled = False
+        self._refresh_loop_visualization()
+
+    def set_loop_markers(
+        self,
+        *,
+        start: Optional[UTCDateTime] = None,
+        end: Optional[UTCDateTime] = None,
+        start_set: bool = False,
+        end_set: bool = False,
+        loop_enabled: bool = False,
+    ) -> None:
+        """Update loop boundary lines and optional shaded band."""
+        self._loop_marker_start = start
+        self._loop_marker_end = end
+        self._loop_start_set = start_set
+        self._loop_end_set = end_set
+        self._loop_band_enabled = loop_enabled
+        self._refresh_loop_visualization()
+
     def set_loop_range(
         self, start: Optional[UTCDateTime] = None, end: Optional[UTCDateTime] = None
     ) -> None:
-        if self._loop_region is not None:
-            self.plot_widget.removeItem(self._loop_region)
-            self._loop_region = None
+        """Legacy helper: set both markers; band follows loop_enabled flag."""
         if start is not None and end is not None:
-            self._loop_region = pg.LinearRegionItem(
-                values=[start.timestamp, end.timestamp],
-                brush=pg.mkBrush(color=(255, 255, 0, 50)),
-                pen=pg.mkPen(color="y", width=1),
+            self.set_loop_markers(
+                start=start,
+                end=end,
+                start_set=True,
+                end_set=True,
+                loop_enabled=self._loop_band_enabled,
             )
-            self.plot_widget.addItem(self._loop_region)
+        else:
+            self.clear_loop_markers()
 
     def _on_mouse_click(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

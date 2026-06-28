@@ -18,8 +18,50 @@ logger = logging.getLogger(__name__)
 class MainWindowDataMixin(_MainWindowBase):
     """Waveform data fetch, model updates, and metadata UI."""
 
+    _LOAD_THREAD_WAIT_MS = 60_000
+
+    def _disconnect_load_thread_signals(self, thread) -> None:
+        """Disconnect UI slots from a load thread (ignore its completion)."""
+        if thread is None:
+            return
+        for signal, slot in (
+            (thread.data_loaded, self._on_data_loaded),
+            (thread.error_occurred, self._on_load_error),
+            (thread.file_count_known, self._on_load_file_count_known),
+            (thread.download_progress, self._on_load_download_progress),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+
+    def _cancel_active_load(self) -> None:
+        """Stop any in-flight data load before starting a new one."""
+        thread = getattr(self, "load_thread", None)
+        if thread is None:
+            return
+
+        if not thread.isRunning():
+            self._disconnect_load_thread_signals(thread)
+            return
+
+        logger.info("Cancelling in-flight data load...")
+        thread.requestInterruption()
+        self._disconnect_load_thread_signals(thread)
+        if thread.wait(self._LOAD_THREAD_WAIT_MS):
+            logger.info("Previous data load thread stopped")
+        else:
+            logger.warning(
+                "Previous data load thread still running after %ss; "
+                "its result will be ignored",
+                self._LOAD_THREAD_WAIT_MS // 1000,
+            )
+
+    def _is_active_load_thread(self, thread) -> bool:
+        return thread is not None and thread is getattr(self, "load_thread", None)
+
     def _reset_state_for_new_load(self):
-        """Reset all state when loading new data (especially when station changes)."""
+        """Reset UI/model state when loading new data."""
         logger.info("Resetting state for new data load...")
 
         if self.playback_controller:
@@ -37,10 +79,6 @@ class MainWindowDataMixin(_MainWindowBase):
         if self.osc_manager:
             logger.debug("Stopping OSC streaming...")
 
-        if self.load_thread and self.load_thread.isRunning():
-            logger.warning("Previous load thread still running, waiting for it...")
-            self.load_thread.wait(1000)
-
         logger.info("State reset complete")
 
     def _on_load_requested(self, selection: dict):
@@ -49,10 +87,9 @@ class MainWindowDataMixin(_MainWindowBase):
         logger.info("Selection: %s", selection)
         logger.info("Station: %s", selection.get("station", "unknown"))
 
-        logger.info("Resetting state for new data load...")
-        self._reset_state_for_new_load()
-
         self.data_picker.set_loading(True)
+        self._cancel_active_load()
+        self._reset_state_for_new_load()
 
         self.load_thread = DataLoadThread(
             self.data_manager,
@@ -63,13 +100,27 @@ class MainWindowDataMixin(_MainWindowBase):
         )
         self.load_thread.data_loaded.connect(self._on_data_loaded)
         self.load_thread.error_occurred.connect(self._on_load_error)
-        self.load_thread.file_count_known.connect(self.data_picker.set_total_files)
-        self.load_thread.download_progress.connect(self.data_picker.update_download_progress)
+        self.load_thread.file_count_known.connect(self._on_load_file_count_known)
+        self.load_thread.download_progress.connect(self._on_load_download_progress)
         self.load_thread.start()
         logger.info("Data load thread started")
 
+    def _on_load_file_count_known(self, total: int) -> None:
+        if not self._is_active_load_thread(self.sender()):
+            return
+        self.data_picker.set_total_files(total)
+
+    def _on_load_download_progress(self, downloaded: int, total: int) -> None:
+        if not self._is_active_load_thread(self.sender()):
+            return
+        self.data_picker.update_download_progress(downloaded, total)
+
     def _on_data_loaded(self, stream):
         """Handle successful data load."""
+        if not self._is_active_load_thread(self.sender()):
+            logger.info("Ignoring data_loaded from superseded load thread")
+            return
+
         process_start = time.time()
 
         logger.info("===== Data loaded callback started =====")
@@ -126,10 +177,16 @@ class MainWindowDataMixin(_MainWindowBase):
         time_range = self.waveform_model.get_time_range()
         if time_range:
             initial_time = time_range[0]
+            self.playback_controls.set_data_time_range(time_range[0], time_range[1])
             self._refresh_value_display(initial_time)
             self.playback_controls.update_position_slider(
                 initial_time, time_range[0], time_range[1]
             )
+            if self.pending_session_state is None:
+                self.playback_controller.clear_loop()
+                self.playback_controls.clear_loop_display()
+                self.playback_controls.set_loop_enabled(False)
+                self.waveform_viewer.clear_loop_markers()
 
         if self.pending_session_state:
             logger.info("Restoring pending session state...")
@@ -149,6 +206,9 @@ class MainWindowDataMixin(_MainWindowBase):
 
     def _on_load_error(self, error_message: str):
         """Handle data load error."""
+        if not self._is_active_load_thread(self.sender()):
+            logger.info("Ignoring load error from superseded load thread")
+            return
         logger.error("Failed to load data: %s", error_message)
         self.data_picker.set_loading(False)
 

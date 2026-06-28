@@ -7,11 +7,14 @@ from typing import List, Optional, Tuple
 
 from obspy import UTCDateTime
 from PySide6.QtCore import Signal, Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -23,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
+from core.playback_controller import MIN_LOOP_LENGTH
 from settings import MAX_SELECTED_CHANNELS
 from .channel_colors import FALLBACK_TRACE_COLOR, channel_color_map
 
@@ -57,6 +61,10 @@ class PlaybackControls(QWidget):
     stop_clicked = Signal()
     speed_changed = Signal(float)
     loop_toggled = Signal(bool)
+    loop_range_changed = Signal(UTCDateTime, UTCDateTime)
+    loop_markers_changed = Signal()
+    capture_loop_start_clicked = Signal()
+    capture_loop_end_clicked = Signal()
     channels_selection_changed = Signal(list)
     position_changed = Signal(UTCDateTime)
 
@@ -65,6 +73,7 @@ class PlaybackControls(QWidget):
         self._position_slider_updating = False
         self._pending_slider_value = None
         self._time_range = None
+        self._loop_inputs_updating = False
         self._channel_ids: List[str] = []
         self._channel_checks: dict[str, QCheckBox] = {}
         self._setup_ui()
@@ -114,6 +123,15 @@ class PlaybackControls(QWidget):
         self.time_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
+        self.time_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.time_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.time_label.customContextMenuRequested.connect(
+            self._show_time_label_context_menu
+        )
+        self.time_label.setToolTip("Select or right-click to copy playhead time")
         row1.addWidget(self.time_label, 1)
 
         layout.addLayout(row1)
@@ -173,11 +191,41 @@ class PlaybackControls(QWidget):
         row4.addLayout(speed_button_layout, 1)
 
         row4.addStretch()
-        self.loop_checkbox = QCheckBox("Enable Loop")
+        self.loop_checkbox = QCheckBox("Loop")
         self.loop_checkbox.toggled.connect(self.loop_toggled.emit)
         row4.addWidget(self.loop_checkbox, 1, Qt.AlignmentFlag.AlignRight)
 
         layout.addLayout(row4)
+
+        row5 = QHBoxLayout()
+        self.loop_start_button = QPushButton("Loop start")
+        self.loop_start_button.setToolTip(
+            "Set loop start to the current playhead position"
+        )
+        self.loop_start_button.clicked.connect(self.capture_loop_start_clicked.emit)
+        row5.addWidget(self.loop_start_button)
+        self.loop_start_edit = QLineEdit()
+        self.loop_start_edit.setPlaceholderText("00:00:00")
+        self.loop_start_edit.setToolTip(
+            "Loop start as elapsed time (HH:MM:SS) from the beginning of the loaded data"
+        )
+        self.loop_start_edit.editingFinished.connect(self._on_loop_inputs_edited)
+        row5.addWidget(self.loop_start_edit, 1)
+        self.loop_end_button = QPushButton("Loop end")
+        self.loop_end_button.setToolTip(
+            "Set loop end to the current playhead position"
+        )
+        self.loop_end_button.clicked.connect(self.capture_loop_end_clicked.emit)
+        row5.addWidget(self.loop_end_button)
+        self.loop_end_edit = QLineEdit()
+        self.loop_end_edit.setPlaceholderText("00:00:00")
+        self.loop_end_edit.setToolTip(
+            "Loop end as elapsed time (HH:MM:SS) from the beginning of the loaded data"
+        )
+        self.loop_end_edit.editingFinished.connect(self._on_loop_inputs_edited)
+        row5.addWidget(self.loop_end_edit, 1)
+
+        layout.addLayout(row5)
         layout.addStretch()
         self.setLayout(layout)
 
@@ -196,6 +244,15 @@ class PlaybackControls(QWidget):
             f"{self._format_duration_seconds(elapsed_s)} / "
             f"{self._format_duration_seconds(total_s)}"
         )
+
+    def _show_time_label_context_menu(self, pos) -> None:
+        menu = QMenu(self)
+        copy_action = QAction("Copy", self)
+        selected = self.time_label.selectedText()
+        text = selected if selected else self.time_label.text()
+        copy_action.triggered.connect(lambda: QApplication.clipboard().setText(text))
+        menu.addAction(copy_action)
+        menu.exec(self.time_label.mapToGlobal(pos))
 
     @staticmethod
     def _non_finite_placeholder(value: Optional[float]) -> bool:
@@ -244,13 +301,177 @@ class PlaybackControls(QWidget):
         self.value_label.setTextFormat(Qt.TextFormat.RichText)
         self.value_label.setText(", ".join(parts))
 
-    def update_loop_display(
-        self, start: UTCDateTime = None, end: UTCDateTime = None
+    def set_data_time_range(
+        self, start: Optional[UTCDateTime], end: Optional[UTCDateTime]
     ) -> None:
-        pass
+        """Store waveform bounds used to convert loop fields to UTC timestamps."""
+        if start is not None and end is not None:
+            self._time_range = (start, end)
+        else:
+            self._time_range = None
+
+    def update_loop_display(
+        self, start: Optional[UTCDateTime] = None, end: Optional[UTCDateTime] = None
+    ) -> None:
+        """Show loop endpoints as elapsed HH:MM:SS from data start."""
+        self._loop_inputs_updating = True
+        self.loop_start_edit.blockSignals(True)
+        self.loop_end_edit.blockSignals(True)
+        if start is not None and end is not None and self._time_range is not None:
+            if start > end:
+                start, end = end, start
+            data_start, _ = self._time_range
+            start_s = float(start - data_start)
+            end_s = float(end - data_start)
+            self.loop_start_edit.setText(self._format_duration_seconds(start_s))
+            self.loop_end_edit.setText(self._format_duration_seconds(end_s))
+        else:
+            self.loop_start_edit.clear()
+            self.loop_end_edit.clear()
+        self.loop_start_edit.blockSignals(False)
+        self.loop_end_edit.blockSignals(False)
+        self._loop_inputs_updating = False
+
+    def clear_loop_display(self) -> None:
+        """Clear loop time fields without emitting range changes."""
+        self.update_loop_display(None, None)
 
     def set_loop_enabled(self, enabled: bool) -> None:
+        self.loop_checkbox.blockSignals(True)
         self.loop_checkbox.setChecked(enabled)
+        self.loop_checkbox.blockSignals(False)
+
+    def get_loop_markers_from_inputs(
+        self,
+    ) -> Tuple[Optional[UTCDateTime], Optional[UTCDateTime], bool, bool]:
+        """Parse loop fields into (start, end, start_set, end_set)."""
+        if self._time_range is None:
+            return None, None, False, False
+
+        data_start, data_end = self._time_range
+        total_s = float(data_end - data_start)
+        start_text = self.loop_start_edit.text().strip()
+        end_text = self.loop_end_edit.text().strip()
+        start_set = bool(start_text)
+        end_set = bool(end_text)
+        start: Optional[UTCDateTime] = None
+        end: Optional[UTCDateTime] = None
+
+        if start_set:
+            start_s = self._parse_duration_text(start_text)
+            if start_s is None:
+                start_set = False
+            else:
+                start_s = max(0.0, min(start_s, total_s))
+                start = data_start + start_s
+
+        if end_set:
+            end_s = self._parse_duration_text(end_text)
+            if end_s is None:
+                end_set = False
+            else:
+                end_s = max(0.0, min(end_s, total_s))
+                end = data_start + end_s
+
+        return start, end, start_set, end_set
+
+    def set_loop_endpoint_from_timestamp(
+        self, endpoint: str, timestamp: UTCDateTime
+    ) -> None:
+        """Set loop start or end field from an absolute UTC timestamp."""
+        if self._time_range is None:
+            return
+        data_start, data_end = self._time_range
+        total_s = float(data_end - data_start)
+        elapsed_s = float(timestamp - data_start)
+        elapsed_s = max(0.0, min(elapsed_s, total_s))
+        text = self._format_duration_seconds(elapsed_s)
+        self._loop_inputs_updating = True
+        if endpoint == "start":
+            self.loop_start_edit.setText(text)
+        elif endpoint == "end":
+            self.loop_end_edit.setText(text)
+        self._loop_inputs_updating = False
+        self._normalize_loop_fields()
+        self._emit_loop_changes()
+
+    def _normalize_loop_fields(self) -> None:
+        """Swap start/end field values when start is after end."""
+        start_s = self._parse_duration_text(self.loop_start_edit.text())
+        end_s = self._parse_duration_text(self.loop_end_edit.text())
+        if start_s is None or end_s is None or start_s <= end_s:
+            return
+        self._loop_inputs_updating = True
+        start_text = self.loop_start_edit.text()
+        end_text = self.loop_end_edit.text()
+        self.loop_start_edit.setText(end_text)
+        self.loop_end_edit.setText(start_text)
+        self._loop_inputs_updating = False
+
+    def get_loop_range_from_inputs(
+        self,
+    ) -> Optional[Tuple[UTCDateTime, UTCDateTime]]:
+        """Parse loop start/end fields into UTC timestamps, or None if invalid."""
+        start, end, start_set, end_set = self.get_loop_markers_from_inputs()
+        if not start_set or not end_set or start is None or end is None:
+            return None
+        if start > end:
+            start, end = end, start
+        if end <= start:
+            return None
+        return (start, end)
+
+    def is_loop_range_valid(self) -> bool:
+        """True when both loop fields form a usable playback range."""
+        loop_range = self.get_loop_range_from_inputs()
+        if loop_range is None:
+            return False
+        start, end = loop_range
+        return (end - start) >= MIN_LOOP_LENGTH
+
+    @staticmethod
+    def _parse_duration_text(text: str) -> Optional[float]:
+        """Parse HH:MM:SS or MM:SS into elapsed seconds."""
+        text = (text or "").strip()
+        if not text:
+            return None
+        parts = text.split(":")
+        try:
+            if len(parts) == 1:
+                return float(parts[0])
+            if len(parts) == 2:
+                minutes, seconds = int(parts[0]), float(parts[1])
+                return minutes * 60.0 + seconds
+            if len(parts) == 3:
+                hours, minutes, seconds = int(parts[0]), int(parts[1]), float(parts[2])
+                return hours * 3600.0 + minutes * 60.0 + seconds
+        except (ValueError, TypeError):
+            return None
+        return None
+
+    def _emit_loop_changes(self) -> None:
+        self.loop_markers_changed.emit()
+        loop_range = self.get_loop_range_from_inputs()
+        if loop_range is None:
+            return
+        start, end = loop_range
+        if (end - start) < MIN_LOOP_LENGTH:
+            return
+        self.loop_range_changed.emit(start, end)
+
+    def _on_loop_inputs_edited(self) -> None:
+        if self._loop_inputs_updating:
+            return
+
+        self._normalize_loop_fields()
+        loop_range = self.get_loop_range_from_inputs()
+        if loop_range is not None and (loop_range[1] - loop_range[0]) < MIN_LOOP_LENGTH:
+            QMessageBox.warning(
+                self,
+                "Loop range",
+                f"Loop range must be at least {MIN_LOOP_LENGTH:.0f} seconds.",
+            )
+        self._emit_loop_changes()
 
     def set_speed(self, speed: float) -> None:
         self.speed_spinbox.setValue(speed)

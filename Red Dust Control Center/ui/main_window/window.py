@@ -194,7 +194,17 @@ class MainWindow(
         self.playback_controls.pause_clicked.connect(self.playback_controller.pause)
         self.playback_controls.stop_clicked.connect(self.playback_controller.stop)
         self.playback_controls.speed_changed.connect(self.playback_controller.set_speed)
-        self.playback_controls.loop_toggled.connect(self.playback_controller.enable_loop)
+        self.playback_controls.loop_toggled.connect(self._on_loop_toggled)
+        self.playback_controls.loop_range_changed.connect(self._on_loop_range_changed)
+        self.playback_controls.loop_markers_changed.connect(
+            self._on_loop_markers_changed
+        )
+        self.playback_controls.capture_loop_start_clicked.connect(
+            self._on_capture_loop_start
+        )
+        self.playback_controls.capture_loop_end_clicked.connect(
+            self._on_capture_loop_end
+        )
         self.playback_controls.channels_selection_changed.connect(
             self._on_channels_selection_changed
         )

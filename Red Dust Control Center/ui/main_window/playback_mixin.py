@@ -44,6 +44,7 @@ class MainWindowPlaybackMixin(_MainWindowBase):
 
         time_range = self.waveform_model.get_time_range()
         if time_range:
+            self.playback_controls.set_data_time_range(time_range[0], time_range[1])
             self.playback_controls.update_time_display(
                 timestamp, time_range[0], time_range[1]
             )
@@ -131,13 +132,96 @@ class MainWindowPlaybackMixin(_MainWindowBase):
         elif state == "stopped":
             self.osc_manager.stop_streaming()
 
-    def _on_loop_range_selected(self, start, end):
-        """Handle loop range selection from waveform viewer."""
+    def _sync_loop_visualization(self) -> None:
+        """Push loop marker state from controls into the waveform viewer."""
+        start, end, start_set, end_set = (
+            self.playback_controls.get_loop_markers_from_inputs()
+        )
+        loop_enabled = self.playback_controller.is_loop_enabled()
+        self.waveform_viewer.set_loop_markers(
+            start=start,
+            end=end,
+            start_set=start_set,
+            end_set=end_set,
+            loop_enabled=loop_enabled,
+        )
+
+    def _on_loop_markers_changed(self) -> None:
+        """Disable looping when start/end inputs no longer form a valid range."""
+        if self.playback_controller.is_loop_enabled():
+            if not self.playback_controls.is_loop_range_valid():
+                self.playback_controller.clear_loop()
+                self.playback_controls.set_loop_enabled(False)
+        elif self.playback_controller.get_loop_range() is not None:
+            if not self.playback_controls.is_loop_range_valid():
+                self.playback_controller.clear_loop()
+        self._sync_loop_visualization()
+
+    def _apply_loop_range(self, start, end, enable_loop: bool = False) -> None:
+        """Set loop range on controller and UI, then refresh viewer markers."""
+        if start > end:
+            start, end = end, start
         try:
             self.playback_controller.set_loop_range(start, end)
-            self.playback_controls.set_loop_enabled(True)
+            if enable_loop:
+                self.playback_controller.enable_loop(True)
+                self.playback_controls.set_loop_enabled(True)
             self.playback_controls.update_loop_display(start, end)
-            self.waveform_viewer.set_loop_range(start, end)
+            self._sync_loop_visualization()
             logger.info("Loop range set: %s to %s", start, end)
         except ValueError as e:
             logger.warning("Invalid loop range: %s", e)
+            QMessageBox.warning(self, "Loop range", str(e))
+
+    def _on_loop_range_selected(self, start, end):
+        """Handle loop range selection from waveform viewer."""
+        self._apply_loop_range(start, end, enable_loop=True)
+
+    def _on_loop_range_changed(self, start, end):
+        """Handle loop range entered in playback controls."""
+        self._apply_loop_range(start, end, enable_loop=False)
+
+    def _on_loop_toggled(self, enabled: bool) -> None:
+        """Enable/disable looping; apply input range when turning on."""
+        if enabled:
+            loop_range = self.playback_controls.get_loop_range_from_inputs()
+            if loop_range is None:
+                time_range = self.waveform_model.get_time_range()
+                if time_range:
+                    loop_range = time_range
+                    try:
+                        self.playback_controller.set_loop_range(*loop_range)
+                    except ValueError as e:
+                        QMessageBox.warning(self, "Loop range", str(e))
+                        self.playback_controls.set_loop_enabled(False)
+                        return
+            elif loop_range:
+                try:
+                    self.playback_controller.set_loop_range(*loop_range)
+                except ValueError as e:
+                    QMessageBox.warning(self, "Loop range", str(e))
+                    self.playback_controls.set_loop_enabled(False)
+                    return
+        self.playback_controller.enable_loop(enabled)
+        self._sync_loop_visualization()
+
+    def _current_playhead_timestamp(self) -> Optional[UTCDateTime]:
+        ts = self.playback_controller.get_current_timestamp()
+        if ts is not None:
+            return ts
+        time_range = self.waveform_model.get_time_range()
+        if time_range:
+            return time_range[0]
+        return None
+
+    def _on_capture_loop_start(self) -> None:
+        ts = self._current_playhead_timestamp()
+        if ts is None:
+            return
+        self.playback_controls.set_loop_endpoint_from_timestamp("start", ts)
+
+    def _on_capture_loop_end(self) -> None:
+        ts = self._current_playhead_timestamp()
+        if ts is None:
+            return
+        self.playback_controls.set_loop_endpoint_from_timestamp("end", ts)
