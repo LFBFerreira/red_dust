@@ -4,7 +4,7 @@ Data Manager for fetching and caching InSight SEIS data from PDS archive.
 import re
 import json
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Callable
 from urllib.parse import urlparse
 import requests
 from obspy import Stream, UTCDateTime, read
@@ -525,12 +525,15 @@ class DataManager:
         logger.info(f"Parallel download complete: {len(downloaded_files)}/{total_files} files downloaded")
         return downloaded_files
     
-    def load_from_cache(self, cache_path: Path) -> Stream:
+    def load_from_cache(
+        self, cache_path: Path, cancel_check: Optional[Callable[[], bool]] = None
+    ) -> Stream:
         """
         Load waveform data from local cache using ObsPy.
         
         Args:
             cache_path: Path to directory containing .mseed files
+            cancel_check: Optional callable returning True when load should abort
         
         Returns:
             ObsPy Stream containing all channels
@@ -538,6 +541,7 @@ class DataManager:
         Raises:
             FileNotFoundError: If no .mseed files found
             ValueError: If data cannot be parsed
+            InterruptedError: If cancel_check returns True during load
         """
         import time
         start_time = time.time()
@@ -566,6 +570,8 @@ class DataManager:
             total_size = 0
             
             for i, mseed_file in enumerate(mseed_files):
+                if cancel_check and cancel_check():
+                    raise InterruptedError("Load from cache cancelled")
                 try:
                     file_start = time.time()
                     trace_stream = read(str(mseed_file))
@@ -601,6 +607,8 @@ class DataManager:
             # Merge traces when possible (same network, station, location, channel)
             merge_start = time.time()
             logger.info(f"Starting trace merge operation...")
+            if cancel_check and cancel_check():
+                raise InterruptedError("Load from cache cancelled")
             stream.merge(method=1)  # Method 1: fill gaps with NaN
             merge_time = time.time() - merge_start
             logger.info(f"Merge complete: {len(stream)} traces after merge, {merge_time:.2f}s elapsed")
@@ -623,7 +631,8 @@ class DataManager:
     
     def fetch_and_cache(self, network: str, station: str, year: int, doy: int,
                        data_type: str = "continuous_waveform", 
-                       progress_callback=None, file_count_callback=None) -> Path:
+                       progress_callback=None, file_count_callback=None,
+                       cancel_check: Optional[Callable[[], bool]] = None) -> Path:
         """
         Fetch data from PDS and cache locally, or load from cache if available.
         
@@ -635,13 +644,18 @@ class DataManager:
             data_type: Type of data
             progress_callback: Optional callback function(current, total) for download progress
             file_count_callback: Optional callback function(total) to report total file count
+            cancel_check: Optional callable returning True when fetch should abort
         
         Returns:
             Path to cache directory
         
         Raises:
             Exception: If fetching or caching fails
+            InterruptedError: If cancel_check returns True during fetch
         """
+        if cancel_check and cancel_check():
+            raise InterruptedError("Fetch cancelled")
+
         cache_path = self.get_cache_path(network, station, year, doy, data_type)
         
         # Check if already cached
@@ -649,6 +663,9 @@ class DataManager:
             logger.info(f"Using cached data for {network}/{station}/{year}/{doy:03d}")
             return cache_path
         
+        if cancel_check and cancel_check():
+            raise InterruptedError("Fetch cancelled")
+
         # Fetch from PDS
         logger.info(f"Fetching data from PDS for {network}/{station}/{year}/{doy:03d}...")
         url = self.build_pds_url(network, station, year, doy, data_type)

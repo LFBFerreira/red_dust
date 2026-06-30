@@ -15,6 +15,8 @@ from ui.theme import (
     write_saved_color_scheme,
     normalize_color_scheme,
 )
+from ui.view_prefs import read_show_log, write_show_log
+from ui.widget_debug import read_show_widget_debug_borders, write_show_widget_debug_borders
 
 from .base import _MainWindowBase
 
@@ -71,6 +73,25 @@ class MainWindowSessionMixin(_MainWindowBase):
             )
         self._sync_theme_menu_checks()
 
+        view_menu = menubar.addMenu("View")
+        self._view_log_action = QAction("View Log", self)
+        self._view_log_action.setCheckable(True)
+        self._view_log_action.setChecked(read_show_log())
+        self._view_log_action.triggered.connect(self._on_view_log_toggled)
+        view_menu.addAction(self._view_log_action)
+
+        self._show_widget_boundaries_action = QAction(
+            "Show Widget Boundaries", self
+        )
+        self._show_widget_boundaries_action.setCheckable(True)
+        self._show_widget_boundaries_action.setChecked(
+            read_show_widget_debug_borders()
+        )
+        self._show_widget_boundaries_action.triggered.connect(
+            self._on_widget_boundaries_toggled
+        )
+        view_menu.addAction(self._show_widget_boundaries_action)
+
         about_menu = menubar.addMenu("About")
 
         about_action = about_menu.addAction("About Red Dust Control Center")
@@ -92,6 +113,14 @@ class MainWindowSessionMixin(_MainWindowBase):
         write_saved_color_scheme(mode)
         self._app_color_scheme = mode
         self._sync_theme_menu_checks()
+
+    def _on_view_log_toggled(self, checked: bool) -> None:
+        write_show_log(checked)
+        self._apply_log_visibility(checked)
+
+    def _on_widget_boundaries_toggled(self, checked: bool) -> None:
+        write_show_widget_debug_borders(checked)
+        self._apply_widget_debug_borders(checked)
 
     def _apply_session_theme_if_present(self, state: dict) -> None:
         """Apply ``app_color_scheme`` from a loaded session and persist to QSettings."""
@@ -349,22 +378,26 @@ class MainWindowSessionMixin(_MainWindowBase):
                     self.playback_controller.enable_loop(loop_enabled)
                     if self.playback_controls:
                         self.playback_controls.set_loop_enabled(loop_enabled)
+                        tr = self.waveform_model.get_time_range()
+                        if tr:
+                            self.playback_controls.set_data_time_range(tr[0], tr[1])
                         self.playback_controls.update_loop_display(loop_start, loop_end)
-                    if self.waveform_viewer:
-                        self.waveform_viewer.set_loop_range(loop_start, loop_end)
+                    self._sync_loop_visualization()
                 except Exception as e:
                     logger.warning("Failed to restore loop range: %s", e)
                     self.playback_controller.clear_loop()
                     if self.playback_controls:
                         self.playback_controls.set_loop_enabled(False)
+                        self.playback_controls.clear_loop_display()
                     if self.waveform_viewer:
-                        self.waveform_viewer.set_loop_range(None, None)
+                        self.waveform_viewer.clear_loop_markers()
             else:
                 self.playback_controller.clear_loop()
                 if self.playback_controls:
                     self.playback_controls.set_loop_enabled(False)
+                    self.playback_controls.clear_loop_display()
                 if self.waveform_viewer:
-                    self.waveform_viewer.set_loop_range(None, None)
+                    self.waveform_viewer.clear_loop_markers()
 
             saved_ct = playback_state.get("current_time")
             tr = self.waveform_model.get_time_range() if self.waveform_model else None
@@ -387,8 +420,9 @@ class MainWindowSessionMixin(_MainWindowBase):
             self.playback_controller.clear_loop()
             if self.playback_controls:
                 self.playback_controls.set_loop_enabled(False)
+                self.playback_controls.clear_loop_display()
             if self.waveform_viewer:
-                self.waveform_viewer.set_loop_range(None, None)
+                self.waveform_viewer.clear_loop_markers()
 
         tr = (
             self.waveform_model.get_time_range() if self.waveform_model else None
@@ -399,6 +433,7 @@ class MainWindowSessionMixin(_MainWindowBase):
             else None
         )
         if tr and ct is not None and self.playback_controls:
+            self.playback_controls.set_data_time_range(tr[0], tr[1])
             self.playback_controls.update_position_slider(ct, tr[0], tr[1])
             self.playback_controls.update_time_display(ct, tr[0], tr[1])
         if self.waveform_viewer and ct is not None:

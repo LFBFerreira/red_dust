@@ -76,6 +76,9 @@ class PlaybackController(QObject):
                 self._current_time = self._loop_start
             else:
                 self._current_time = start_time
+
+        if self._loop_enabled:
+            self._snap_playhead_to_loop_if_needed(emit=True)
         
         # Record playback start for speed calculation
         from time import time as current_time
@@ -164,12 +167,17 @@ class PlaybackController(QObject):
         Raises:
             ValueError: If loop range is less than minimum length
         """
-        loop_length = (end_time - start_time) / 86400.0 * 86400.0  # Convert to seconds
+        if start_time > end_time:
+            start_time, end_time = end_time, start_time
+
+        loop_length = float(end_time - start_time)
         if loop_length < MIN_LOOP_LENGTH:
             raise ValueError(f"Loop range must be at least {MIN_LOOP_LENGTH} seconds")
         
         self._loop_start = start_time
         self._loop_end = end_time
+        if self._loop_enabled:
+            self._snap_playhead_to_loop_if_needed(emit=True)
         logger.info(f"Loop range set: {start_time} to {end_time}")
     
     def enable_loop(self, enabled: bool) -> None:
@@ -180,6 +188,8 @@ class PlaybackController(QObject):
             enabled: True to enable looping
         """
         self._loop_enabled = enabled
+        if enabled:
+            self._snap_playhead_to_loop_if_needed(emit=True)
         logger.info(f"Loop {'enabled' if enabled else 'disabled'}")
     
     def get_loop_range(self) -> Optional[Tuple[UTCDateTime, UTCDateTime]]:
@@ -255,6 +265,25 @@ class PlaybackController(QObject):
             "stopped", "playing", or "paused"
         """
         return self._state
+
+    def _snap_playhead_to_loop_if_needed(self, emit: bool = False) -> bool:
+        """Move playhead to loop start when looping is on and playhead is outside the band."""
+        if not (self._loop_enabled and self._loop_start and self._loop_end):
+            return False
+        if self._current_time is None:
+            return False
+        if self._loop_start <= self._current_time <= self._loop_end:
+            return False
+
+        self._current_time = self._loop_start
+        if self._state == "playing" and self._playback_start_time is not None:
+            from time import time as current_time
+            self._playback_start_position = self._loop_start
+            self._playback_start_time = current_time()
+        if emit:
+            self.playhead_updated.emit(self._current_time)
+        logger.debug("Playhead snapped to loop start %s", self._loop_start)
+        return True
     
     def _update_playhead(self) -> None:
         """Update playhead position (called by timer)."""
@@ -286,17 +315,12 @@ class PlaybackController(QObject):
         
         # Handle loop or end of data
         if self._loop_enabled and self._loop_start and self._loop_end:
-            loop_length = (self._loop_end - self._loop_start)
-            if loop_length <= 0:
+            loop_length_seconds = float(self._loop_end - self._loop_start)
+            if loop_length_seconds <= 0:
                 # Invalid loop range, just use clamped new_time
                 self._current_time = new_time
             elif new_time > self._loop_end:
-                # Calculate how far past the loop end we went
-                excess = new_time - self._loop_end
-                # Wrap the excess back into the loop range
-                # Use modulo to handle cases where excess > loop_length (multiple loops)
-                excess_seconds = excess.total_seconds()
-                loop_length_seconds = loop_length.total_seconds()
+                excess_seconds = float(new_time - self._loop_end)
                 if loop_length_seconds > 0:
                     wrapped_seconds = excess_seconds % loop_length_seconds
                     self._current_time = self._loop_start + wrapped_seconds

@@ -44,6 +44,7 @@ class DataPicker(QWidget):
         self.data_manager = data_manager
         self._available_years: list[int] = []
         self._available_days: list[int] = []
+        self._loading = False
         self._setup_ui()
     
     def _setup_ui(self):
@@ -118,7 +119,6 @@ class DataPicker(QWidget):
         progress_layout.addWidget(self.progress_bar)
         layout.addLayout(progress_layout)
         
-        layout.addStretch()
         self.setLayout(layout)
     
     def set_data_manager(self, data_manager) -> None:
@@ -246,7 +246,9 @@ class DataPicker(QWidget):
         Args:
             loading: True to show loading indicator
         """
-        self.load_button.setEnabled(not loading)
+        self._loading = loading
+        self.load_button.setText("Cancel Load" if loading else "Load Data")
+        self.load_button.setEnabled(True)
         self.progress_bar.setVisible(loading)
         self.progress_label.setVisible(loading)
         if not loading:
@@ -278,9 +280,12 @@ class DataPicker(QWidget):
         self.progress_label.setText(f"Downloading: {downloaded} / {total} files")
     
     def _on_load_clicked(self) -> None:
-        """Handle Load Data button click."""
+        """Handle Load Data / Cancel Load button click."""
         selection = self.get_selection()
-        logger.info(f"Load requested: {selection}")
+        if self._loading:
+            logger.info("Load cancelled by user; restarting with: %s", selection)
+        else:
+            logger.info("Load requested: %s", selection)
         self.load_requested.emit(selection)
 
 

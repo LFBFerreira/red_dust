@@ -76,6 +76,9 @@ def _refresh_theme_sensitive_widgets(app: QApplication) -> None:
         oc = getattr(top, "object_cards", None)
         if oc is not None and hasattr(oc, "_refresh_interactive_objects_tab_style"):
             oc._refresh_interactive_objects_tab_style()
+        pc = getattr(top, "playback_controls", None)
+        if pc is not None and hasattr(pc, "_refresh_channel_strip_theme"):
+            pc._refresh_channel_strip_theme()
 
 
 def apply_app_color_scheme(app: QApplication, mode: Optional[str] = None) -> str:
