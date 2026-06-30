@@ -24,9 +24,13 @@ TraceWidget pinTrace0(&gr);
 TraceWidget pinTrace1(&gr);
 TraceWidget pinTrace2(&gr);
 TraceWidget pinTrace3(&gr);
-TraceWidget* const pinTraces[MAX_PINS] = {&pinTrace0, &pinTrace1, &pinTrace2, &pinTrace3};
+TraceWidget pinTrace4(&gr);
+TraceWidget pinTrace5(&gr);
+TraceWidget* const pinTraces[MAX_PINS] = {&pinTrace0, &pinTrace1, &pinTrace2,
+                                          &pinTrace3, &pinTrace4, &pinTrace5};
 
-static const uint16_t TRACE_COLORS[MAX_PINS] = {TFT_RED, TFT_GREEN, TFT_YELLOW, TFT_CYAN};
+static const uint16_t TRACE_COLORS[MAX_PINS] = {TFT_RED,  TFT_GREEN,  TFT_YELLOW,
+                                                TFT_CYAN, TFT_MAGENTA, TFT_WHITE};
 
 // Graph configuration
 const float gxLow = 0.0;

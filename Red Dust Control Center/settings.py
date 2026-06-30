@@ -24,7 +24,7 @@ AVAILABLE_STATIONS = ["ELYSE", "ELYS0", "ELYHK", "ELYH0"]
 
 # Max simultaneous waveform channel selections (must be <= len(CHANNEL_TRACE_COLORS)
 # in ui/widgets/channel_colors.py; extra palette colors are unused until you raise this).
-MAX_SELECTED_CHANNELS = 5
+MAX_SELECTED_CHANNELS = 6
 
 # Cap points sent to pyqtgraph per channel (display only; stream / cache stay full rate).
 MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL = 8000
@@ -55,8 +55,8 @@ OSC_OBJECT_ENDPOINT_DEBOUNCE_MS = 500  # Apply OSC host/address after typing pau
 # --- Streaming / I/O (firmware & protocol contract) ---
 
 # Multi-pin wire format: index 0 = first float in OSC/Serial frame (Pin_A), etc.
-MAX_PIN_SLOTS = 5
-PIN_SLOT_LABELS = ("Pin_A", "Pin_B", "Pin_C", "Pin_D", "Pin_E")
+MAX_PIN_SLOTS = 6
+PIN_SLOT_LABELS = ("Pin_A", "Pin_B", "Pin_C", "Pin_D", "Pin_E", "Pin_F")
 # Slots with no mapped channel send this float; firmware treats values outside [0, 1] as inactive.
 WIRE_INACTIVE_PIN_SENTINEL = -1.0
 

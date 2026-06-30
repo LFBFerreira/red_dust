@@ -1,6 +1,8 @@
 #include "mcp4725.h"
 #include "settings.h"
 
+#if ENABLE_MCP4725
+
 #include <Wire.h>
 
 static bool s_ready = false;
@@ -51,3 +53,5 @@ void mcp4725_write_level(uint8_t deviceIndex, float level01) {
   uint16_t v = (uint16_t)(level01 * 4095.0f + 0.5f);
   mcp4725_write(deviceIndex, v);
 }
+
+#endif  // ENABLE_MCP4725
