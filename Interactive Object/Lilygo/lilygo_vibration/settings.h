@@ -46,8 +46,8 @@ static const TactileRoute TACTILE_ROUTES[MAX_PINS] = {
 // Per-channel output ceiling (0..1) applied before PWM mapping. Use this to protect
 // lower-power exciters: e.g. DAEX19CT-4 (5W) vs DAEX25VT-4 (20W). Set the 5W channels
 // to a lower value so they never reach full drive. 1.0 = no limit.
-// Pin_A/B/C -> DAEX25VT-4 (20W): full range. Pin_D/E/F -> DAEX19CT-4 (5W): capped at 0.3.
-static const float TACTILE_MAX_LEVEL[MAX_PINS] = {1.0f, 1.0f, 1.0f, 0.3f, 0.3f, 0.3f};
+// Pin_A/B/C/D -> DAEX25VT-4 (20W): full range. Pin_E/F -> DAEX19CT-4 (5W): capped at 0.3.
+static const float TACTILE_MAX_LEVEL[MAX_PINS] = {1.0f, 1.0f, 1.0f, 1.0f, 0.3f, 0.3f};
 
 // --- Optional PCM5102 (feature disabled above; macros kept defined so i2s_audio.cpp
 //     still compiles. With ENABLE_I2S_PCM5102 0 the I2S driver is never started and
