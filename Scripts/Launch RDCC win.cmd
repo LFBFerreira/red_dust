@@ -16,7 +16,7 @@ if not exist "%VENV_PY%" (
   echo Virtual environment not found at:
   echo   %VENV_PY%
   echo.
-  echo Run "Setup RDCC venv.bat" in Scripts once, then try again.
+  echo Run "Setup venv win.bat" in Scripts once, then try again.
   pause
   exit /b 1
 )

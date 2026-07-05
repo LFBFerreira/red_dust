@@ -108,16 +108,10 @@ class DataPicker(QWidget):
         layout.addWidget(self.load_button)
         
         # Loading indicator
-        progress_layout = QVBoxLayout()
-        self.progress_label = QLabel("")
-        self.progress_label.setVisible(False)
-        progress_layout.addWidget(self.progress_label)
-        
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
-        progress_layout.addWidget(self.progress_bar)
-        layout.addLayout(progress_layout)
+        layout.addWidget(self.progress_bar)
         
         self.setLayout(layout)
     
@@ -250,11 +244,8 @@ class DataPicker(QWidget):
         self.load_button.setText("Cancel Load" if loading else "Load Data")
         self.load_button.setEnabled(True)
         self.progress_bar.setVisible(loading)
-        self.progress_label.setVisible(loading)
         if not loading:
-            # Reset progress bar
             self.progress_bar.setRange(0, 0)
-            self.progress_label.setText("")
     
     def set_total_files(self, total: int) -> None:
         """
@@ -266,18 +257,10 @@ class DataPicker(QWidget):
         """
         self.progress_bar.setRange(0, total)
         self.progress_bar.setValue(0)
-        self.progress_label.setText(f"Downloading: 0 / {total} files")
     
     def update_download_progress(self, downloaded: int, total: int) -> None:
-        """
-        Update download progress.
-        
-        Args:
-            downloaded: Number of files downloaded so far
-            total: Total number of files
-        """
+        """Update download progress bar."""
         self.progress_bar.setValue(downloaded)
-        self.progress_label.setText(f"Downloading: {downloaded} / {total} files")
     
     def _on_load_clicked(self) -> None:
         """Handle Load Data / Cancel Load button click."""
