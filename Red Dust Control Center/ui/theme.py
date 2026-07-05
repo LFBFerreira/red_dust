@@ -81,6 +81,28 @@ def _refresh_theme_sensitive_widgets(app: QApplication) -> None:
             pc._refresh_channel_strip_theme()
 
 
+def _sync_native_style_palette(app: QApplication) -> None:
+    """Re-read the active native style palette (fixes unset ButtonText on some platforms)."""
+    style = app.style()
+    if style is not None:
+        app.setPalette(style.standardPalette())
+
+
+def finish_startup_theme(app: QApplication) -> None:
+    """
+    Run once after the main window is shown when using the system theme.
+
+    On macOS and Linux (including Raspberry Pi), the native palette can leave
+    button text the same colour as the button until the first sync — switching
+    to Light/Dark and back fixes it because that path rebuilds the palette.
+    """
+    if _last_applied_theme_mode != "system":
+        return
+
+    _sync_native_style_palette(app)
+    _refresh_theme_sensitive_widgets(app)
+
+
 def apply_app_color_scheme(app: QApplication, mode: Optional[str] = None) -> str:
     """
     Apply ``mode`` (``system`` / ``light`` / ``dark``). If ``mode`` is None, use QSettings
@@ -109,8 +131,10 @@ def apply_app_color_scheme(app: QApplication, mode: Optional[str] = None) -> str
                 _unset_app_color_scheme_override(hints)
                 app.setStyle(None)
                 app.setPalette(QPalette())
-            # First startup (prev is None) or System→System: do not touch style/palette
-            # or style hints — same as before any theme code existed.
+            elif prev is None:
+                # Prime palette before widgets are built; finish_startup_theme() runs
+                # again after the main window is shown for QSS that uses palette().
+                _sync_native_style_palette(app)
             return mode
 
         app.setStyle("Fusion")

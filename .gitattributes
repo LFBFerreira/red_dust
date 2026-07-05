@@ -1,0 +1,4 @@
+# Shell scripts use LF line endings (required on Linux/macOS).
+*.sh text eol=lf
+*.command text eol=lf
+*.desktop text eol=lf

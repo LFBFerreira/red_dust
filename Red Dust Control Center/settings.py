@@ -37,8 +37,8 @@ MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL = 8000
 APP_COLOR_SCHEME = "system"
 
 # View menu defaults (persisted in QSettings; see ui/view_prefs.py and ui/widget_debug.py).
-SHOW_LOG = True
-SHOW_WIDGET_DEBUG_BORDERS = True
+SHOW_LOG = False
+SHOW_WIDGET_DEBUG_BORDERS = False
 
 # Main window layout.
 LEFT_PANEL_WIDTH = 250  # Left column in top half (Dataset Information, Data Picker)

@@ -2,7 +2,7 @@
 # Double-click this file in Finder to open Terminal and run Red Dust Control Center
 # with a console for log output while the app runs. Uses Red Dust Control Center/.venv
 #
-# First time on this Mac: run "Setup RDCC venv.command" in Scripts.
+# First time on this Mac: run "Setup venv mac.command" in Scripts.
 # chmod +x "Launch RDCC mac.command" if Finder won't run it.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -19,7 +19,7 @@ if [ ! -x "$VENV_PY" ]; then
   echo "Virtual environment not found at:"
   echo "  $VENV_PY"
   echo ""
-  echo "Run \"Setup RDCC venv.command\" in Scripts once, then try again."
+  echo "Run \"Setup venv mac.command\" in Scripts once, then try again."
   read -r -p "Press Enter to close..."
   exit 1
 fi
