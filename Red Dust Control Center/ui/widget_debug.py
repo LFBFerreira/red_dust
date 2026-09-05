@@ -26,6 +26,7 @@ WIDGET_DEBUG_COLORS: dict[str, str] = {
     "PlaybackControls": "#2ecc71",
     "ObjectCards": "#9b59b6",
     "LogViewer": "#f39c12",
+    "StoryTimeline": "#e67e22",
 }
 
 
@@ -113,5 +114,6 @@ def iter_widget_debug_targets(main_window) -> Iterable[tuple[str, QWidget]]:
     yield "DataPicker", main_window.data_picker
     yield "WaveformViewer", main_window.waveform_viewer
     yield "PlaybackControls", main_window.playback_controls
+    yield "StoryTimeline", main_window.story_timeline
     yield "ObjectCards", main_window.object_cards
     yield "LogViewer", main_window.log_viewer

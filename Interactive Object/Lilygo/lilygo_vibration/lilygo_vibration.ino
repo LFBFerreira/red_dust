@@ -2,6 +2,7 @@
 #include "settings.h"
 #include "i2s_audio.h"
 #include "tactile_output.h"
+#include "dy_hv20t.h"
 
 // TFT Display includes
 #include <TFT_eSPI.h>
@@ -51,6 +52,7 @@ bool lastSerialConnected = false;
 bool lastSerialReceiving = false;
 bool lastOscReceiving = false;
 float lastDisplayedValue = -1.0;
+bool lastDyPlaying = false;
 
 bool wifiConnected = false;
 bool lastWifiConnected = false;
@@ -136,7 +138,37 @@ bool processControlMessage(const String& message) {
     return true;
   }
 
+  if (msg.startsWith("DY,") || msg.startsWith("DY=")) {
+    int sep = msg.indexOf(',');
+    if (sep < 0) sep = msg.indexOf('=');
+    if (sep > 0 && sep < (int)msg.length() - 1) {
+      String cmd = msg.substring(sep + 1);
+      cmd.trim();
+      cmd.toUpperCase();
+#if ENABLE_DY_HV20T
+      if (cmd == "PLAY" || cmd == "START") {
+        dy_hv20t_play();
+      } else if (cmd == "STOP") {
+        dy_hv20t_stop();
+      } else {
+        Serial.println("Unknown DY command (use PLAY or STOP)");
+      }
+#else
+      Serial.println("DY-HV20T disabled in settings.h");
+#endif
+    }
+    return true;
+  }
+
   return false;
+}
+
+bool tactileOutputArmed() {
+#if ENABLE_DY_HV20T && DY_GATE_TACTILE_OUTPUT
+  return dy_hv20t_is_playing();
+#else
+  return true;
+#endif
 }
 
 void updateTactileOutputs() {
@@ -144,7 +176,8 @@ void updateTactileOutputs() {
   for (int i = 0; i < MAX_PINS; i++) {
     tactile_output_set_level(i, latestPinValues[i]);
   }
-  tactile_output_apply(hasPWMData);
+  // Gate hardware drive only; latestPinValues / graph still follow RDCC while Stopped.
+  tactile_output_apply(hasPWMData && tactileOutputArmed());
 #endif
 }
 
@@ -493,10 +526,15 @@ void updateGui() {
   }
 
   bool isReceivingData = serialReceivingData || oscReceivingData;
+  bool dyPlaying = false;
+#if ENABLE_DY_HV20T
+  dyPlaying = dy_hv20t_is_playing();
+#endif
   bool needsUpdate = false;
   if (serialConnected != lastSerialConnected || serialReceivingData != lastSerialReceiving ||
       oscReceivingData != lastOscReceiving || pinsChanged || wifiStatusText != lastWifiStatusText ||
-      wifiConnected != lastWifiConnected || fabs(latestValue - lastDisplayedValue) > 0.0001f) {
+      wifiConnected != lastWifiConnected || fabs(latestValue - lastDisplayedValue) > 0.0001f ||
+      dyPlaying != lastDyPlaying) {
     needsUpdate = true;
   }
 
@@ -510,9 +548,10 @@ void updateGui() {
 #if ENABLE_I2S_PCM5102
   pcmMode = (i2s_audio_get_mode() == I2S_MODE_TACTILE) ? "PCM-mute" : "PCM-AUD";
 #endif
-  Serial.printf("[status] %s | %s | %s | A=%.3f B=%.3f C=%.3f D=%.3f\n", wifiStatusText.c_str(),
-                isReceivingData ? "Active" : "Idle", pcmMode, latestPinValues[0],
-                latestPinValues[1], latestPinValues[2], latestPinValues[3]);
+  Serial.printf("[status] %s | %s | %s | OUT=%s | A=%.3f B=%.3f C=%.3f D=%.3f\n",
+                wifiStatusText.c_str(), isReceivingData ? "Active" : "Idle", pcmMode,
+                dyPlaying ? "ON" : "MUTE", latestPinValues[0], latestPinValues[1],
+                latestPinValues[2], latestPinValues[3]);
 #endif
 
   tft.setTextFont(2);
@@ -525,7 +564,7 @@ void updateGui() {
   tft.setTextColor(wifiStatusColor, TFT_BLACK, true);
   tft.print(wifiStatusText);
 
-  tft.setCursor(120, 5);
+  tft.setCursor(110, 5);
   if (isReceivingData) {
     tft.setTextColor(TFT_CYAN, TFT_BLACK, true);
     tft.print("Active");
@@ -533,6 +572,17 @@ void updateGui() {
     tft.setTextColor(TFT_YELLOW, TFT_BLACK, true);
     tft.print("Idle");
   }
+
+#if ENABLE_DY_HV20T
+  tft.setCursor(155, 5);
+  if (dyPlaying) {
+    tft.setTextColor(TFT_GREEN, TFT_BLACK, true);
+    tft.print("DY");
+  } else {
+    tft.setTextColor(TFT_RED, TFT_BLACK, true);
+    tft.print("DY");
+  }
+#endif
 
   tft.setCursor(190, 5);
   tft.setTextColor(TFT_WHITE, TFT_BLACK, true);
@@ -542,6 +592,7 @@ void updateGui() {
   lastSerialReceiving = serialReceivingData;
   lastOscReceiving = oscReceivingData;
   lastDisplayedValue = latestValue;
+  lastDyPlaying = dyPlaying;
   for (int i = 0; i < MAX_PINS; i++) {
     lastSnapshotForGui[i] = latestPinValues[i];
   }
@@ -593,6 +644,7 @@ void initializeDisplay() {
   lastSerialReceiving = false;
   lastOscReceiving = false;
   lastDisplayedValue = -1.0;
+  lastDyPlaying = false;
   lastWifiConnected = false;
   lastWifiStatusText = "";
   wifiConnected = false;
@@ -658,7 +710,13 @@ void setup() {
   Serial.println("Serial commands: MODE,TAC | MODE,AUD | FREQ,<Hz>");
 #endif
 #if ENABLE_PWM_OUTPUT
-  Serial.println("Motors: Pin_C..E -> PWM GPIOs (see settings.h PWM_OUTPUT_PINS)");
+  Serial.println("Motors: Pin_A..F -> PWM GPIOs (see settings.h PWM_TACTILE_PINS)");
+#endif
+#if ENABLE_DY_HV20T
+  Serial.println("DY-HV20T: buttons Play/Stop + Serial DY,PLAY | DY,STOP");
+#if DY_GATE_TACTILE_OUTPUT
+  Serial.println("Output gate: Play = DY+PWM to amps; Stop = mute PWM (RDCC keeps streaming)");
+#endif
 #endif
   Serial.println("==========================================");
 
@@ -683,10 +741,16 @@ void setup() {
   }
 #endif
   initializeTactileOutputs();
+#if ENABLE_DY_HV20T
+  dy_hv20t_begin();
+#endif
 }
 
 void loop() {
   processSerialMessages();
+#if ENABLE_DY_HV20T
+  dy_hv20t_update();  // before tactile apply so Stop mutes PWM immediately
+#endif
   updateVibrationMotor();
   wm.process();
   updateWiFiStatus();

@@ -1,0 +1,395 @@
+"""Data loading, metadata display, and data picker session restore."""
+
+import logging
+import time
+
+from settings import DEFAULT_NETWORK, DEFAULT_STATION
+from .base import _MainWindowBase
+from .constants import (
+    DATASET_LABEL_TITLE_HTML,
+    DATASET_METADATA_EMPTY_MESSAGE,
+    _LOG_TAG,
+)
+from .threads import DataLoadThread, MetadataLoadThread
+
+logger = logging.getLogger(__name__)
+
+
+class MainWindowDataMixin(_MainWindowBase):
+    """Waveform data fetch, model updates, and metadata UI."""
+
+    _LOAD_THREAD_WAIT_MS = 60_000
+
+    def _disconnect_load_thread_signals(self, thread) -> None:
+        """Disconnect UI slots from a load thread (ignore its completion)."""
+        if thread is None:
+            return
+        for signal, slot in (
+            (thread.data_loaded, self._on_data_loaded),
+            (thread.error_occurred, self._on_load_error),
+            (thread.file_count_known, self._on_load_file_count_known),
+            (thread.download_progress, self._on_load_download_progress),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+
+    def _cancel_active_load(self) -> None:
+        """Stop any in-flight data load before starting a new one."""
+        thread = getattr(self, "load_thread", None)
+        if thread is None:
+            return
+
+        if not thread.isRunning():
+            self._disconnect_load_thread_signals(thread)
+            return
+
+        logger.info("Cancelling in-flight data load...")
+        thread.requestInterruption()
+        self._disconnect_load_thread_signals(thread)
+        if thread.wait(self._LOAD_THREAD_WAIT_MS):
+            logger.info("Previous data load thread stopped")
+        else:
+            logger.warning(
+                "Previous data load thread still running after %ss; "
+                "its result will be ignored",
+                self._LOAD_THREAD_WAIT_MS // 1000,
+            )
+
+    def _is_active_load_thread(self, thread) -> bool:
+        return thread is not None and thread is getattr(self, "load_thread", None)
+
+    def _reset_state_for_new_load(self):
+        """Reset UI/model state when loading new data."""
+        logger.info("Resetting state for new data load...")
+
+        if self.playback_controller:
+            logger.debug("Stopping playback controller...")
+            self.playback_controller.stop()
+
+        if self.waveform_viewer:
+            logger.debug("Clearing waveform viewer...")
+            self.waveform_viewer.plot_widget.clear()
+
+        if self.waveform_model:
+            logger.debug("Resetting waveform model...")
+            self.waveform_model.set_stream(None)
+
+        if self.osc_manager:
+            logger.debug("Stopping OSC streaming...")
+
+        logger.info("State reset complete")
+        self._sync_fullscreen_preview()
+
+    def _on_load_requested(self, selection: dict):
+        """Handle data load request."""
+        logger.info("===== Starting data load request =====")
+        logger.info("Selection: %s", selection)
+        logger.info("Station: %s", selection.get("station", "unknown"))
+
+        self.data_picker.set_loading(True)
+        self._cancel_active_load()
+        self._reset_state_for_new_load()
+
+        self.load_thread = DataLoadThread(
+            self.data_manager,
+            selection["network"],
+            selection["station"],
+            selection["year"],
+            selection["doy"],
+        )
+        self.load_thread.data_loaded.connect(self._on_data_loaded)
+        self.load_thread.error_occurred.connect(self._on_load_error)
+        self.load_thread.file_count_known.connect(self._on_load_file_count_known)
+        self.load_thread.download_progress.connect(self._on_load_download_progress)
+        self.load_thread.start()
+        logger.info("Data load thread started")
+
+    def _on_load_file_count_known(self, total: int) -> None:
+        if not self._is_active_load_thread(self.sender()):
+            return
+        self.data_picker.set_total_files(total)
+
+    def _on_load_download_progress(self, downloaded: int, total: int) -> None:
+        if not self._is_active_load_thread(self.sender()):
+            return
+        self.data_picker.update_download_progress(downloaded, total)
+
+    def _on_data_loaded(self, stream):
+        """Handle successful data load."""
+        if not self._is_active_load_thread(self.sender()):
+            logger.info("Ignoring data_loaded from superseded load thread")
+            return
+
+        process_start = time.time()
+
+        logger.info("===== Data loaded callback started =====")
+        logger.info("Stream contains %s traces", len(stream))
+
+        if stream and len(stream) > 0:
+            first_trace = stream[0]
+            logger.info(
+                "First trace: %s, station: %s, samples: %s, rate: %s Hz",
+                first_trace.id,
+                first_trace.stats.station,
+                f"{first_trace.stats.npts:,}",
+                first_trace.stats.sampling_rate,
+            )
+            total_samples = sum(t.stats.npts for t in stream)
+            logger.info("Total samples across all traces: %s", f"{total_samples:,}")
+
+        self.data_picker.set_loading(False)
+
+        logger.info("Setting stream in waveform model...")
+        model_start = time.time()
+        self.waveform_model.set_stream(stream)
+        model_time = time.time() - model_start
+        logger.info("Waveform model updated in %.2fs", model_time)
+
+        logger.info("Updating channel controls...")
+        channels = self.waveform_model.get_all_channels()
+        logger.info("Found %s channels: %s", len(channels), channels)
+        self.playback_controls.set_channels(channels)
+        selected = self.waveform_model.get_selected_channels()
+        self.playback_controls.set_selected_channels(selected)
+        self._update_object_card_channels()
+        # Session load: objects are restored with pin_rows before data finishes loading.
+        # Do not prune pins against the default stream selection here — that would drop
+        # rows whose channels only appear after _restore_session_state_after_load runs.
+        if self.pending_session_state is None:
+            self._sync_interactive_objects_to_playback_channels(set(selected))
+
+        logger.info("Updating waveform viewer...")
+        viewer_start = time.time()
+        try:
+            self.waveform_viewer.update_waveform(stream, selected)
+        except Exception:
+            logger.exception("Failed to update waveform viewer after data load")
+        viewer_time = time.time() - viewer_start
+        logger.info("Waveform viewer updated in %.2fs", viewer_time)
+
+        logger.info("Updating metadata display...")
+        try:
+            self._update_metadata()
+        except Exception:
+            logger.exception("Failed to update dataset information after data load")
+
+        logger.info("Resetting playback controller...")
+        self.playback_controller.stop()
+
+        self.playback_controller.set_waveform_model(self.waveform_model)
+
+        logger.info("Updating value display...")
+        time_range = self.waveform_model.get_time_range()
+        if time_range:
+            initial_time = time_range[0]
+            self.playback_controls.set_data_time_range(time_range[0], time_range[1])
+            self._refresh_value_display(initial_time)
+            self.playback_controls.update_position_slider(
+                initial_time, time_range[0], time_range[1]
+            )
+            if self.pending_session_state is None:
+                self.playback_controller.clear_loop()
+                self.playback_controls.clear_loop_display()
+                self.playback_controls.set_loop_enabled(False)
+                self.waveform_viewer.clear_loop_markers()
+
+        if self.pending_session_state:
+            logger.info("Restoring pending session state...")
+            self._restore_session_state_after_load(self.pending_session_state)
+            self.pending_session_state = None
+
+        logger.debug(
+            "%s _on_data_loaded done selected=%s ref=%s",
+            _LOG_TAG,
+            len(self.waveform_model.get_selected_channels()),
+            self.waveform_model.get_active_channel(),
+        )
+        process_time = time.time() - process_start
+        logger.info(
+            "===== Data loaded callback complete in %.2fs =====", process_time
+        )
+        self._sync_fullscreen_preview()
+
+    def _on_load_error(self, error_message: str):
+        """Handle data load error."""
+        if not self._is_active_load_thread(self.sender()):
+            logger.info("Ignoring load error from superseded load thread")
+            return
+        logger.error("Failed to load data: %s", error_message)
+        self.data_picker.set_loading(False)
+
+    def _update_metadata(self):
+        """Update metadata display."""
+        self.dataset_label.setText(DATASET_LABEL_TITLE_HTML)
+
+        if not self.waveform_model.get_stream():
+            self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
+            self._sync_fullscreen_metadata()
+            return
+
+        stream = self.waveform_model.get_stream()
+        if stream is None or len(stream) == 0:
+            self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
+            self._sync_fullscreen_metadata()
+            return
+
+        trace = stream[0]
+        active_channel = self.waveform_model.get_active_channel()
+        selected = self.waveform_model.get_selected_channels()
+        selected_line = ", ".join(selected) if selected else "—"
+        channel_info = self.waveform_model.get_channel_info(active_channel)
+        sr = self.waveform_model.get_sample_rate()
+        sr_line = f"{sr:.2f} Hz" if sr is not None else "--"
+
+        metadata = f"""Network: {trace.stats.network}
+Station: {trace.stats.station}
+Reference Channel: {active_channel or '—'}
+Selected channels: {selected_line}
+Sample Rate: {sr_line}"""
+
+        if channel_info:
+            time_range = self.waveform_model.get_time_range()
+            if time_range:
+                t0, t1 = time_range[0], time_range[1]
+                duration_h = float(t1 - t0) / 3600.0
+                metadata += f"""
+Time Range: {t0} to {t1}
+Duration: {duration_h:.2f} hours"""
+
+        self.metadata_text.setText(metadata)
+        self._sync_fullscreen_metadata()
+
+    def _sync_fullscreen_metadata(self) -> None:
+        win = getattr(self, "_fullscreen_window", None)
+        if win is None:
+            return
+        if not self.waveform_model.get_stream():
+            win.set_dataset_fields(empty_message=DATASET_METADATA_EMPTY_MESSAGE)
+            return
+        stream = self.waveform_model.get_stream()
+        if stream is None or len(stream) == 0:
+            win.set_dataset_fields(empty_message=DATASET_METADATA_EMPTY_MESSAGE)
+            return
+        trace = stream[0]
+        selected = self.waveform_model.get_selected_channels()
+        selected_line = ", ".join(selected) if selected else "—"
+        time_range_line = None
+        duration_line = None
+        time_range = self.waveform_model.get_time_range()
+        if time_range:
+            t0, t1 = time_range[0], time_range[1]
+            duration_h = float(t1 - t0) / 3600.0
+            time_range_line = f"{t0} to {t1}"
+            duration_line = f"{duration_h:.2f} hours"
+        win.set_dataset_fields(
+            network=str(trace.stats.network),
+            station=str(trace.stats.station),
+            selected_channels=selected_line,
+            time_range=time_range_line,
+            duration=duration_line,
+        )
+
+    def _load_metadata_async(self):
+        """Load metadata (available years/days) in background."""
+        logger.info("Starting background thread to refresh metadata from PDS...")
+        self.metadata_thread = MetadataLoadThread(
+            self.data_manager,
+            DEFAULT_NETWORK,
+            DEFAULT_STATION,
+        )
+
+        def on_metadata_loaded():
+            logger.info("Metadata refresh complete, updating UI...")
+            if self.data_picker and self.data_picker.data_manager:
+                self.data_picker._load_available_years()
+            else:
+                logger.warning(
+                    "Cannot update UI: DataPicker or DataManager not available"
+                )
+
+        self.metadata_thread.metadata_loaded.connect(on_metadata_loaded)
+        self.metadata_thread.start()
+        logger.info("Background metadata refresh thread started")
+
+    def _restore_data_selection(self, selection: dict):
+        """Restore data selection and trigger data load."""
+        network = selection["network"]
+        station = selection["station"]
+        year = selection["year"]
+        doy = selection["doy"]
+
+        logger.info(
+            "Restoring data selection: %s/%s/%s/%s", network, station, year, doy
+        )
+
+        self.data_picker.station_combo.blockSignals(True)
+        self.data_picker.year_combo.blockSignals(True)
+        self.data_picker.day_combo.blockSignals(True)
+
+        try:
+            network_index = self.data_picker.network_combo.findText(network)
+            if network_index >= 0:
+                self.data_picker.network_combo.setCurrentIndex(network_index)
+
+            station_index = self.data_picker.station_combo.findText(station)
+            if station_index >= 0:
+                self.data_picker.station_combo.setCurrentIndex(station_index)
+
+            if self.data_picker.data_manager:
+                try:
+                    years = self.data_picker.data_manager.get_available_years(
+                        network, station
+                    )
+                    self.data_picker._available_years = years
+
+                    self.data_picker.year_combo.clear()
+                    if years:
+                        self.data_picker.year_combo.addItems([str(y) for y in years])
+                        year_index = self.data_picker.year_combo.findText(str(year))
+                        if year_index >= 0:
+                            self.data_picker.year_combo.setCurrentIndex(year_index)
+                        else:
+                            logger.warning("Year %s not found in available years", year)
+                            self.data_picker.year_combo.setCurrentIndex(0)
+                    else:
+                        logger.warning("No years found for %s/%s", network, station)
+                except Exception as e:
+                    logger.error("Failed to load available years: %s", e, exc_info=True)
+
+            if self.data_picker.data_manager and self.data_picker.year_combo.count() > 0:
+                try:
+                    days = self.data_picker.data_manager.get_available_days(
+                        network, station, year
+                    )
+                    self.data_picker._available_days = days
+
+                    self.data_picker.day_combo.clear()
+                    if days:
+                        self.data_picker.day_combo.addItems([str(d) for d in days])
+                        day_index = self.data_picker.day_combo.findText(str(doy))
+                        if day_index >= 0:
+                            self.data_picker.day_combo.setCurrentIndex(day_index)
+                        else:
+                            logger.warning("Day %s not found in available days", doy)
+                            self.data_picker.day_combo.setCurrentIndex(0)
+                    else:
+                        logger.warning(
+                            "No days found for %s/%s/%s", network, station, year
+                        )
+                except Exception as e:
+                    logger.error("Failed to load available days: %s", e, exc_info=True)
+
+            self.data_picker.load_requested.emit(
+                {
+                    "network": network,
+                    "station": station,
+                    "year": year,
+                    "doy": doy,
+                }
+            )
+        finally:
+            self.data_picker.station_combo.blockSignals(False)
+            self.data_picker.year_combo.blockSignals(False)
+            self.data_picker.day_combo.blockSignals(False)

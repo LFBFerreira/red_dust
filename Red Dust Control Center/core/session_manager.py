@@ -88,6 +88,7 @@ class SessionManager:
         data_picker=None,
         object_cards=None,
         app_color_scheme: Optional[str] = None,
+        dust_devil: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Create state dictionary from current application state.
@@ -100,6 +101,7 @@ class SessionManager:
             data_picker: DataPicker instance (optional)
             object_cards: Object cards container (optional)
             app_color_scheme: ``system`` | ``light`` | ``dark`` for session JSON (optional)
+            dust_devil: Story timeline / pin cue dict (optional)
 
         Returns:
             State dictionary
@@ -175,6 +177,9 @@ class SessionManager:
                 objects.append(obj_config)
         if objects:
             state["objects"] = objects
+
+        if dust_devil:
+            state["dust_devil"] = dust_devil
 
         return state
     

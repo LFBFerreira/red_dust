@@ -5,6 +5,10 @@
 #define ENABLE_TACTILE_OUTPUT 1   // PWM+RC -> amplifier inputs
 #define ENABLE_I2S_PCM5102 0      // No audio/bone-conduction path; all channels are PWM tactile
 #define ENABLE_MCP4725 0          // No DAC channels anymore; everything is PWM+RC
+#define ENABLE_DY_HV20T 1         // UART Play/Stop for DY-HV20T amplifier module
+
+// DY uses GPIO 17/21/22. Keep ENABLE_I2S_PCM5102 and ENABLE_MCP4725 off while DY is on
+// (I2S claims 17+22; MCP4725 I2C claims 21).
 
 // RDCC slots (Pin_A .. Pin_F)
 #define MAX_PINS 6
@@ -64,6 +68,21 @@ static const float TACTILE_MAX_LEVEL[MAX_PINS] = {1.0f, 1.0f, 1.0f, 1.0f, 0.3f, 
 #define I2S_LEFT_PIN_INDEX 0
 #define I2S_RIGHT_PIN_INDEX 1
 #define I2S_DEFAULT_OUTPUT_MODE 0
+
+// --- DY-HV20T (UART Mode: CON3=1 CON2=0 CON1=0 → IO1=RXD, IO0=TXD) ---
+#if ENABLE_DY_HV20T
+#define DY_UART_NUM 1
+#define DY_TX_PIN 17              // ESP TX -> DY IO1 / RXD
+#define DY_RX_PIN -1              // optional; set e.g. 2 to read replies
+#define DY_BAUD 9600
+#define DY_PIN_PLAY_BTN 21        // momentary to GND (INPUT_PULLUP)
+#define DY_PIN_STOP_BTN 22        // momentary to GND (INPUT_PULLUP)
+#define DY_BTN_DEBOUNCE_MS 40
+#define DY_SEND_STOP_ON_BOOT 1
+// Play arms tactile PWM to amplifiers; Stop forces all PWM/DAC to 0.
+// RDCC/OSC/serial keep running either way (values still update the graph).
+#define DY_GATE_TACTILE_OUTPUT 1
+#endif
 
 // Serial / OSC
 #define SERIAL_BAUDRATE 115200

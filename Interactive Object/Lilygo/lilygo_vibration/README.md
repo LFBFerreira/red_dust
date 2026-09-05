@@ -140,6 +140,31 @@ Tactile transducers do **not** use PCM5102. I2S is optional for headphones or a 
 | LRCK | **17** |
 | DIN | **22** |
 
+### Optional DY-HV20T (speaker Play / Stop)
+
+With `ENABLE_DY_HV20T 1` (default), the same firmware drives a **DY-HV20T** in UART Mode via two momentary buttons. Tactile PWM pins are unchanged.
+
+**DY jumpers (UART Mode):** CON3=1, CON2=0, CON1=0 → IO1=RXD, IO0=TXD.
+
+| LilyGO | DY-HV20T / button |
+|--------|-------------------|
+| GPIO **17** (TX) | **IO1 / RXD** |
+| **GND** | **GND** |
+| GPIO **21** | Play button → GND |
+| GPIO **22** | Stop button → GND |
+| — | DY VCC ← **6–35 V** (separate supply) |
+
+| Serial command | Effect |
+|----------------|--------|
+| `DY,PLAY` | Send UART Play (`AA 02 00 AC`); arm tactile PWM to amplifiers |
+| `DY,STOP` | Send UART Stop (`AA 04 00 AE`); force all tactile PWM/DAC to 0 |
+
+With `DY_GATE_TACTILE_OUTPUT 1` (default), Play/Stop is a shared **output gate**: Red Dust Control Center can keep streaming; the graph still updates; amplifiers only receive PWM while **Play** is active. Boot starts in Stop (muted).
+
+Status bar **DY** = green while armed/playing, red while muted. Do not enable `ENABLE_I2S_PCM5102` or `ENABLE_MCP4725` at the same time (pin overlap on 17/21/22).
+
+Standalone test sketch (overwrites board firmware): `../dy_hv20t_play_stop/`.
+
 ### Serial frame
 
 - Format: `v1,v2,v3,v4,timestamp\n`
@@ -169,11 +194,12 @@ The `settings.h` file allows you to configure the most important settings for th
   - `OSC_PORT`: UDP port for OSC messages (default: 8000)
 
 - **Hardware Configuration:**
-  - `MAX_PINS`: `4` (Pin_A .. Pin_D)
-  - `ENABLE_TACTILE_OUTPUT` / `ENABLE_I2S_PCM5102`
+  - `MAX_PINS`: `6` (Pin_A .. Pin_F)
+  - `ENABLE_TACTILE_OUTPUT` / `ENABLE_I2S_PCM5102` / `ENABLE_DY_HV20T`
   - `MCP4725_I2C_ADDR[]`, `I2C_SDA_PIN`, `I2C_SCL_PIN`
   - `PWM_TACTILE_PINS[]`, `TACTILE_ROUTES[]`
   - `I2S_*`: PCM5102 pins and AUDIO mode tuning
+  - `DY_*`: UART TX pin, Play/Stop button pins, baud
 
 - **PWM Settings:**
   - `PWM_MIN`: Minimum PWM value - motor off (default: 0)

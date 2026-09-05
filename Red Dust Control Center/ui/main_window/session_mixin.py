@@ -248,6 +248,7 @@ class MainWindowSessionMixin(_MainWindowBase):
                 app_color_scheme=getattr(
                     self, "_app_color_scheme", read_saved_color_scheme()
                 ),
+                dust_devil=self._dust_devil_state_dict(),
             )
 
             self.session_manager.save_session(file_path, state)
@@ -299,6 +300,8 @@ class MainWindowSessionMixin(_MainWindowBase):
                     self.object_cards,
                     state,
                 )
+
+            self._restore_dust_devil_state(state)
 
             if self.waveform_model.get_stream():
                 self._restore_session_state_after_load(state)

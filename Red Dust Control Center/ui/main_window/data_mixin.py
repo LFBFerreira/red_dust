@@ -80,6 +80,7 @@ class MainWindowDataMixin(_MainWindowBase):
             logger.debug("Stopping OSC streaming...")
 
         logger.info("State reset complete")
+        self._sync_fullscreen_preview()
 
     def _on_load_requested(self, selection: dict):
         """Handle data load request."""
@@ -203,6 +204,7 @@ class MainWindowDataMixin(_MainWindowBase):
         logger.info(
             "===== Data loaded callback complete in %.2fs =====", process_time
         )
+        self._sync_fullscreen_preview()
 
     def _on_load_error(self, error_message: str):
         """Handle data load error."""
@@ -218,11 +220,13 @@ class MainWindowDataMixin(_MainWindowBase):
 
         if not self.waveform_model.get_stream():
             self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
+            self._sync_fullscreen_metadata()
             return
 
         stream = self.waveform_model.get_stream()
         if stream is None or len(stream) == 0:
             self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
+            self._sync_fullscreen_metadata()
             return
 
         trace = stream[0]
@@ -249,6 +253,37 @@ Time Range: {t0} to {t1}
 Duration: {duration_h:.2f} hours"""
 
         self.metadata_text.setText(metadata)
+        self._sync_fullscreen_metadata()
+
+    def _sync_fullscreen_metadata(self) -> None:
+        win = getattr(self, "_fullscreen_window", None)
+        if win is None:
+            return
+        if not self.waveform_model.get_stream():
+            win.set_dataset_fields(empty_message=DATASET_METADATA_EMPTY_MESSAGE)
+            return
+        stream = self.waveform_model.get_stream()
+        if stream is None or len(stream) == 0:
+            win.set_dataset_fields(empty_message=DATASET_METADATA_EMPTY_MESSAGE)
+            return
+        trace = stream[0]
+        selected = self.waveform_model.get_selected_channels()
+        selected_line = ", ".join(selected) if selected else "—"
+        time_range_line = None
+        duration_line = None
+        time_range = self.waveform_model.get_time_range()
+        if time_range:
+            t0, t1 = time_range[0], time_range[1]
+            duration_h = float(t1 - t0) / 3600.0
+            time_range_line = f"{t0} to {t1}"
+            duration_line = f"{duration_h:.2f} hours"
+        win.set_dataset_fields(
+            network=str(trace.stats.network),
+            station=str(trace.stats.station),
+            selected_channels=selected_line,
+            time_range=time_range_line,
+            duration=duration_line,
+        )
 
     def _load_metadata_async(self):
         """Load metadata (available years/days) in background."""

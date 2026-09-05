@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Optional, Set
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
     QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
@@ -190,6 +191,9 @@ class ObjectCard(QWidget):
         for col in range(self.pin_table.columnCount()):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
         self.pin_table.verticalHeader().setVisible(False)
+        self.pin_table.setSizeAdjustPolicy(
+            QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored
+        )
         right.addWidget(self.pin_table, 1)
         self.pin_table.viewport().installEventFilter(self)
 

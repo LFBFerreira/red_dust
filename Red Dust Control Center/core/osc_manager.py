@@ -11,8 +11,10 @@ import logging
 
 from core.interactive_object import InteractiveObject
 from core.osc_object import OSCObject
+from core.pin_cues import PinCueList
 from core.pin_stream import PinStreamRow, wire_bundle_width
 from core.serial_object import SerialObject
+from core.story_clock import StoryClock
 from settings import SERIAL_BAUDRATE, OSC_OUTPUT_INTERVAL_MS, SERIAL_OUTPUT_INTERVAL_MS
 
 logger = logging.getLogger(__name__)
@@ -27,11 +29,14 @@ class OSCManager(QObject):
     object_streaming_state_changed = Signal(str, bool)
     object_value_updated = Signal(str, dict)
     object_connection_state_changed = Signal(str, bool)
+    dy_button_received = Signal(str)
 
     def __init__(self, waveform_model=None, playback_controller=None):
         super().__init__()
         self._waveform_model = waveform_model
         self._playback_controller = playback_controller
+        self._story_clock: Optional[StoryClock] = None
+        self._pin_cues: Optional[PinCueList] = None
         self._objects: Dict[str, InteractiveObject] = {}
         self._streaming = False
 
@@ -40,7 +45,7 @@ class OSCManager(QObject):
         self._osc_timer.setInterval(OSC_OUTPUT_INTERVAL_MS)
 
         self._serial_timer = QTimer()
-        self._serial_timer.timeout.connect(self._send_serial_frame)
+        self._serial_timer.timeout.connect(self._on_serial_timer)
         self._serial_timer.setInterval(SERIAL_OUTPUT_INTERVAL_MS)
 
     def set_waveform_model(self, waveform_model) -> None:
@@ -48,6 +53,66 @@ class OSCManager(QObject):
 
     def set_playback_controller(self, playback_controller) -> None:
         self._playback_controller = playback_controller
+
+    def set_story_sources(
+        self,
+        story_clock: Optional[StoryClock],
+        pin_cues: Optional[PinCueList],
+    ) -> None:
+        self._story_clock = story_clock
+        self._pin_cues = pin_cues
+
+    def send_dy_command(self, play: bool) -> int:
+        """Send ``DY,PLAY`` or ``DY,STOP`` to every Serial object with an open port."""
+        line = "DY,PLAY\n" if play else "DY,STOP\n"
+        sent = 0
+        for obj in self._objects.values():
+            if not isinstance(obj, SerialObject):
+                continue
+            if obj.send_control_line(line):
+                sent += 1
+                logger.info("Sent %s to %s", line.strip(), obj.object_id)
+            else:
+                logger.warning(
+                    "Could not send %s to %s (serial port not open)",
+                    line.strip(),
+                    obj.object_id,
+                )
+        return sent
+
+    def flush_all_frames(self) -> None:
+        for object_id in list(self._objects.keys()):
+            self.flush_object_frame(object_id)
+
+    def _refresh_serial_timer(self) -> None:
+        need = any(
+            isinstance(obj, SerialObject) and (obj.streaming_enabled or obj.is_connected())
+            for obj in self._objects.values()
+        )
+        if need and not self._serial_timer.isActive():
+            self._serial_timer.start()
+        elif not need and self._serial_timer.isActive():
+            self._serial_timer.stop()
+
+    def _on_serial_timer(self) -> None:
+        self._poll_serial_input()
+        self._send_serial_frame()
+
+    def _poll_serial_input(self) -> None:
+        for obj in self._objects.values():
+            if not isinstance(obj, SerialObject):
+                continue
+            for line in obj.read_available_lines():
+                self._handle_device_line(line)
+
+    def _handle_device_line(self, line: str) -> None:
+        text = line.strip().upper().replace(" ", "")
+        if text in ("DY,BTN,PLAY", "DY,BTN,START"):
+            logger.info("Dust Devil device button: PLAY")
+            self.dy_button_received.emit("PLAY")
+        elif text == "DY,BTN,STOP":
+            logger.info("Dust Devil device button: STOP")
+            self.dy_button_received.emit("STOP")
 
     def add_osc_object(
         self,
@@ -122,6 +187,7 @@ class OSCManager(QObject):
                 self.object_connection_state_changed.emit(object_id, False)
 
             del self._objects[object_id]
+            self._refresh_serial_timer()
             logger.info("Removed object: %s", object_id)
 
     def get_object(self, object_id: str) -> Optional[InteractiveObject]:
@@ -192,12 +258,7 @@ class OSCManager(QObject):
         logger.info("Stopped streaming for object: %s", object_id)
 
         if isinstance(obj, SerialObject):
-            if not any(
-                o.streaming_enabled
-                for o in self._objects.values()
-                if isinstance(o, SerialObject)
-            ):
-                self._serial_timer.stop()
+            self._refresh_serial_timer()
         else:
             if not any(
                 o.streaming_enabled
@@ -302,8 +363,21 @@ class OSCManager(QObject):
                 n = self._waveform_model.get_normalized_value_for_channel(
                     r.channel_id, current_time
                 )
-                ordered.append((r.row_id, n))
+                ordered.append((r.row_id, self._apply_story_gate(s, n)))
         return ordered
+
+    def _apply_story_gate(self, slot_index: int, value: float) -> float:
+        """Pin_A..F are on only while a story clip covers the current story time."""
+        cues = self._pin_cues
+        if cues is None:
+            return value
+        if slot_index < 0 or slot_index >= cues.pin_count:
+            return value
+        clock = self._story_clock
+        t = clock.get_current_sec() if clock is not None else 0.0
+        if cues.is_on(slot_index, t):
+            return value
+        return 0.0
 
     def flush_object_frame(self, object_id: str) -> None:
         """Send one streaming frame immediately (e.g. after pin layout changes while streaming)."""

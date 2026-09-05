@@ -29,6 +29,9 @@ MAX_SELECTED_CHANNELS = 10
 # Cap points sent to pyqtgraph per channel (display only; stream / cache stay full rate).
 MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL = 8000
 
+# Full-screen live strip: one paging window of seismic time, LilyGO-style.
+FULLSCREEN_WAVEFORM_WINDOW_SEC = 10.0 * 60.0  # 10 minutes
+
 
 # --- UI ---
 
@@ -41,8 +44,9 @@ SHOW_LOG = False
 SHOW_WIDGET_DEBUG_BORDERS = False
 
 # Main window layout.
-LEFT_PANEL_WIDTH = 250  # Left column in top half (Dataset Information, Data Picker)
-DEFAULT_WINDOW_WIDTH = 1100
+LEFT_PANEL_WIDTH = 250  # Dataset Information / Data Picker column
+STATIONS_PANEL_WIDTH = 720  # Initial width of the Dust Devil timeline column
+DEFAULT_WINDOW_WIDTH = 1680
 DEFAULT_WINDOW_HEIGHT = 800
 WIDGET_PANEL_MARGIN = 12  # Empty space around each major UI panel (pixels)
 
@@ -72,3 +76,17 @@ OSC_OUTPUT_INTERVAL_MS = 1000 // OSC_OUTPUT_RATE  # ~16.67 ms
 SERIAL_BAUDRATE = 115200
 SERIAL_OUTPUT_RATE = 60  # Hz
 SERIAL_OUTPUT_INTERVAL_MS = 1000 // SERIAL_OUTPUT_RATE  # ~16.67 ms
+
+
+# --- Dust Devil story timeline (pin on/off cues) ---
+
+# First N wire slots (Pin_A ..) that the story timeline can gate.
+STORY_PIN_COUNT = 6
+# Default story length: 14 minutes 30 seconds.
+STORY_DURATION_SEC = 14 * 60 + 30
+# Shortest clip that can be drawn on a lane.
+STORY_MIN_CLIP_SEC = 0.25
+# Waveform playback-speed envelope drawn on the Dust Devil timeline.
+STORY_SPEED_MIN = 1.0
+STORY_SPEED_MAX = 100.0
+STORY_SPEED_DEFAULT = 1.0

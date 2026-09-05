@@ -41,7 +41,7 @@ def write_saved_color_scheme(mode: str) -> None:
 
 
 def _apply_fusion_dark_palette(app: QApplication) -> None:
-    """Fusion-friendly dark palette when ``QStyleHints.setColorScheme`` is unavailable."""
+    """Explicit Fusion dark palette (Raspberry Pi ignores ``setColorScheme``)."""
     p = QPalette()
     p.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
     p.setColor(QPalette.ColorRole.WindowText, QColor(220, 220, 220))
@@ -57,7 +57,29 @@ def _apply_fusion_dark_palette(app: QApplication) -> None:
     p.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
     p.setColor(QPalette.ColorRole.HighlightedText, QColor(250, 250, 250))
     p.setColor(QPalette.ColorRole.PlaceholderText, QColor(127, 127, 127))
-    app.setPalette(p)
+    p.setColor(QPalette.ColorRole.Light, QColor(80, 80, 80))
+    p.setColor(QPalette.ColorRole.Midlight, QColor(65, 65, 65))
+    p.setColor(QPalette.ColorRole.Mid, QColor(45, 45, 45))
+    p.setColor(QPalette.ColorRole.Dark, QColor(35, 35, 35))
+    p.setColor(QPalette.ColorRole.Shadow, QColor(20, 20, 20))
+    disabled = QColor(127, 127, 127)
+    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, disabled)
+    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, disabled)
+    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled)
+    _set_app_palette(app, p)
+
+
+def _apply_fusion_light_palette(app: QApplication) -> None:
+    style = app.style()
+    if style is not None:
+        _set_app_palette(app, style.standardPalette())
+
+
+def _set_app_palette(app: QApplication, palette: QPalette) -> None:
+    """Apply palette to the app and already-created widgets."""
+    app.setPalette(palette)
+    for widget in app.allWidgets():
+        widget.setPalette(palette)
 
 
 def _unset_app_color_scheme_override(hints) -> None:
@@ -79,6 +101,15 @@ def _refresh_theme_sensitive_widgets(app: QApplication) -> None:
         pc = getattr(top, "playback_controls", None)
         if pc is not None and hasattr(pc, "_refresh_channel_strip_theme"):
             pc._refresh_channel_strip_theme()
+        st = getattr(top, "story_timeline", None)
+        if st is not None:
+            st.update()
+            canvas = getattr(st, "canvas", None)
+            if canvas is not None:
+                canvas.update()
+        fs = getattr(top, "_fullscreen_window", None)
+        if fs is not None:
+            fs.update()
 
 
 def _sync_native_style_palette(app: QApplication) -> None:
@@ -145,15 +176,15 @@ def apply_app_color_scheme(app: QApplication, mode: Optional[str] = None) -> str
                     hints.setColorScheme(Qt.ColorScheme.Dark)
                 else:
                     hints.setColorScheme(Qt.ColorScheme.Light)
-                return mode
             except (TypeError, AttributeError) as e:
-                logger.debug("setColorScheme not usable (%s); using palette fallback", e)
+                logger.debug("setColorScheme not usable (%s)", e)
 
-        logger.info("Using Fusion palette fallback for color scheme %r", mode)
+        # Always set Fusion palettes. On Raspberry Pi OS, setColorScheme often
+        # succeeds but leaves widgets on the desktop's light colours.
         if mode == "dark":
             _apply_fusion_dark_palette(app)
         else:
-            app.setPalette(app.style().standardPalette())
+            _apply_fusion_light_palette(app)
         return mode
     finally:
         _refresh_theme_sensitive_widgets(app)
