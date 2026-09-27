@@ -102,16 +102,16 @@ bool processControlMessage(const String& message) {
 #if ENABLE_I2S_PCM5102
       if (modeStr == "AUD" || modeStr == "AUDIO") {
         i2s_audio_set_mode(I2S_MODE_AUDIO);
-        Serial.printf("PCM5102 AUDIO: tone %.1f Hz, Pin_A=L Pin_B=R envelope\n", I2S_CARRIER_HZ);
+        serialDebugPrintf("PCM5102 AUDIO: tone %.1f Hz, Pin_A=L Pin_B=R envelope\n", I2S_CARRIER_HZ);
       } else if (modeStr == "TAC" || modeStr == "TACTILE") {
         i2s_audio_set_mode(I2S_MODE_TACTILE);
         i2s_audio_mute();
-        Serial.println("PCM5102 muted; tactile on MCP4725 (A,B) + PWM+RC (C,D) -> HW-104");
+        serialDebugPrintln("PCM5102 muted; tactile on MCP4725 (A,B) + PWM+RC (C,D) -> HW-104");
       } else {
-        Serial.println("Unknown MODE (use TAC or AUD)");
+        serialDebugPrintln("Unknown MODE (use TAC or AUD)");
       }
 #else
-      Serial.println("PCM5102 disabled in settings.h");
+      serialDebugPrintln("PCM5102 disabled in settings.h");
 #endif
     }
     return true;
@@ -127,9 +127,9 @@ bool processControlMessage(const String& message) {
       if (fStr.length() > 0 && hz > 0) {
 #if ENABLE_I2S_PCM5102
         i2s_audio_set_carrier_hz((float)hz);
-        Serial.printf("PCM5102 tone frequency set to %d Hz\n", hz);
+        serialDebugPrintf("PCM5102 tone frequency set to %d Hz\n", hz);
 #else
-        Serial.println("PCM5102 disabled in settings.h");
+        serialDebugPrintln("PCM5102 disabled in settings.h");
 #endif
       }
     }
@@ -425,7 +425,7 @@ void processOSCMessages() {
     packetCount++;
 
     if (packetSize > OSC_BUFFER_SIZE) {
-      Serial.printf("OSC packet too large: %d bytes\n", packetSize);
+      serialDebugPrintf("OSC packet too large: %d bytes\n", packetSize);
       while (udp.available()) udp.read();
       continue;
     }
@@ -446,11 +446,11 @@ void processOSCMessages() {
       int use = (fcnt < MAX_PINS) ? fcnt : MAX_PINS;
       applyPinFrame(oscVals, use, SOURCE_OSC);
     } else {
-      Serial.println("Failed to parse OSC message");
+      serialDebugPrintln("Failed to parse OSC message");
     }
 
     if (packetCount > 1) {
-      Serial.printf("Discarded %d OSC packets, processed latest\n", packetCount - 1);
+      serialDebugPrintf("Discarded %d OSC packets, processed latest\n", packetCount - 1);
     }
   }
 
@@ -505,14 +505,25 @@ void updateGui() {
   }
 
   float displayValue = constrain(latestValue, 0.0f, 1.0f);
-#if SERIAL_STATUS_DEBUG
   const char* pcmMode = "PCM-off";
 #if ENABLE_I2S_PCM5102
   pcmMode = (i2s_audio_get_mode() == I2S_MODE_TACTILE) ? "PCM-mute" : "PCM-AUD";
 #endif
-  Serial.printf("[status] %s | %s | %s | A=%.3f B=%.3f C=%.3f D=%.3f\n", wifiStatusText.c_str(),
+  serialDebugPrintf("[status] %s | %s | %s | A=%.3f B=%.3f C=%.3f D=%.3f\n", wifiStatusText.c_str(),
                 isReceivingData ? "Active" : "Idle", pcmMode, latestPinValues[0],
                 latestPinValues[1], latestPinValues[2], latestPinValues[3]);
+
+#if ACTIVE_BOARD != BOARD_TTGO_T_DISPLAY
+  lastSerialConnected = serialConnected;
+  lastSerialReceiving = serialReceivingData;
+  lastOscReceiving = oscReceivingData;
+  lastDisplayedValue = latestValue;
+  for (int i = 0; i < MAX_PINS; i++) {
+    lastSnapshotForGui[i] = latestPinValues[i];
+  }
+  lastWifiStatusText = wifiStatusText;
+  lastWifiConnected = wifiConnected;
+  return;
 #endif
 
   tft.setTextFont(2);
@@ -558,10 +569,57 @@ void updateVibrationMotor() {
 #endif
 }
 
+#if ENABLE_STATUS_RGB_LED
+static uint8_t s_statusLedR = 255;
+static uint8_t s_statusLedG = 255;
+static uint8_t s_statusLedB = 255;
+
+static void statusRgbWrite(uint8_t r, uint8_t g, uint8_t b) {
+  if (r == s_statusLedR && g == s_statusLedG && b == s_statusLedB) {
+    return;
+  }
+  s_statusLedR = r;
+  s_statusLedG = g;
+  s_statusLedB = b;
+  // Built-in WS2812; RMT timing breaks if spammed every loop with WiFi on.
+  neopixelWrite(STATUS_RGB_LED_PIN, r, g, b);
+}
+
+static void statusRgbBootTest() {
+  // Visible boot flash so we can tell pin/driver work before WiFi starts.
+  neopixelWrite(STATUS_RGB_LED_PIN, 0, 0, 0);
+  delay(50);
+  neopixelWrite(STATUS_RGB_LED_PIN, 255, 0, 0);
+  delay(200);
+  neopixelWrite(STATUS_RGB_LED_PIN, 0, 255, 0);
+  delay(200);
+  neopixelWrite(STATUS_RGB_LED_PIN, 0, 0, 255);
+  delay(200);
+  neopixelWrite(STATUS_RGB_LED_PIN, 0, 0, 0);
+  s_statusLedR = s_statusLedG = s_statusLedB = 0;
+}
+
+void updateStatusRgbLed() {
+  // Serial or OSC (WiFi) both count as "receiving"
+  if (!serialReceivingData && !oscReceivingData) {
+    statusRgbWrite(255, 0, 0);  // red = idle
+    return;
+  }
+  float level = constrain(latestPinValues[0], 0.0f, 1.0f);
+  uint8_t blue = (uint8_t)(level * 255.0f);
+  // Keep a dim blue floor so "receiving at 0" is still visible vs idle red.
+  if (blue < 16) {
+    blue = 16;
+  }
+  statusRgbWrite(0, 0, blue);  // blue intensity = Pin_A
+}
+#endif
+
 void initializeDisplay() {
+#if ACTIVE_BOARD == BOARD_TTGO_T_DISPLAY
   pinMode(4, OUTPUT);
   digitalWrite(4, HIGH);  // Backlight on first (TTGO T-Display = GPIO 4)
-  Serial.println("Backlight: GPIO 4 HIGH");
+  serialDebugPrintln("Backlight: GPIO 4 HIGH");
 
   tft.init();
   tft.setRotation(3);
@@ -599,7 +657,11 @@ void initializeDisplay() {
 
   updateGui();
 
-  Serial.println("TFT display and graph initialized (multi-pin overlay)");
+  serialDebugPrintln("TFT display and graph initialized (multi-pin overlay)");
+#else
+  // DevKitC-1 has no TFT; do not touch GPIO4 (Pin_A PWM on that board).
+  graphInitialized = false;
+#endif
 }
 
 void initializeWiFi() {
@@ -613,13 +675,13 @@ void initializeWiFi() {
   bool wifiStarted = wm.autoConnect("Red_Dust_Object");
 
   if (wifiStarted) {
-    Serial.println("WiFi connected immediately");
+    serialDebugPrintln("WiFi connected immediately");
+    serialDebugPrintf("OSC listening on UDP port %d, path: %s (multi-float + timestamp)\n", OSC_PORT,
+                  OSC_PATH);
     wifiConnected = true;
     udp.begin(OSC_PORT);
-    Serial.printf("OSC listening on UDP port %d, path: %s (multi-float + timestamp)\n", OSC_PORT,
-                  OSC_PATH);
   } else {
-    Serial.println("WiFi connection attempt started (non-blocking)");
+    serialDebugPrintln("WiFi connection attempt started (non-blocking)");
     wifiConnected = false;
   }
 }
@@ -627,7 +689,7 @@ void initializeWiFi() {
 void initializeTactileOutputs() {
 #if ENABLE_TACTILE_OUTPUT
   if (!tactile_output_begin()) {
-    Serial.println("WARNING: MCP4725 init failed — check I2C wiring and addresses 0x60/0x61");
+    serialDebugPrintln("WARNING: MCP4725 init failed — check I2C wiring and addresses 0x60/0x61");
   }
 #endif
 }
@@ -637,11 +699,11 @@ void updateWiFiStatus() {
   if (currentWifiStatus != wifiConnected) {
     wifiConnected = currentWifiStatus;
     if (wifiConnected) {
-      Serial.println("WiFi connected");
+      serialDebugPrintln("WiFi connected");
+      serialDebugPrintf("OSC listening on UDP port %d, path: %s\n", OSC_PORT, OSC_PATH);
       udp.begin(OSC_PORT);
-      Serial.printf("OSC listening on UDP port %d, path: %s\n", OSC_PORT, OSC_PATH);
     } else {
-      Serial.println("WiFi disconnected");
+      serialDebugPrintln("WiFi disconnected");
     }
   }
 }
@@ -650,17 +712,22 @@ void setup() {
   Serial.begin(SERIAL_BAUDRATE);
   delay(500);
 
-  Serial.println("\nRed Dust Interactive Object (multi-pin)");
-  Serial.println("Serial: v1[,v2,...],timestamp  (last comma = timestamp; up to MAX_PINS values)");
-  Serial.println("OSC: base path + typetag ,f...fs + floats BE + timestamp string");
+  serialDebugPrintln("\nRed Dust Interactive Object (multi-pin)");
+  serialDebugPrintln("Serial: v1[,v2,...],timestamp  (last comma = timestamp; up to MAX_PINS values)");
+  serialDebugPrintln("OSC: base path + typetag ,f...fs + floats BE + timestamp string");
 #if ENABLE_I2S_AUDIO
-  Serial.println("I2S -> PCM5102: Pin_A=L, Pin_B=R (TACTILE=DC level, AUDIO=tone)");
-  Serial.println("Serial commands: MODE,TAC | MODE,AUD | FREQ,<Hz>");
+  serialDebugPrintln("I2S -> PCM5102: Pin_A=L, Pin_B=R (TACTILE=DC level, AUDIO=tone)");
+  serialDebugPrintln("Serial commands: MODE,TAC | MODE,AUD | FREQ,<Hz>");
 #endif
 #if ENABLE_PWM_OUTPUT
-  Serial.println("Motors: Pin_C..E -> PWM GPIOs (see settings.h PWM_OUTPUT_PINS)");
+  serialDebugPrintln("Motors: PWM GPIOs (see settings.h PWM_TACTILE_PINS)");
 #endif
-  Serial.println("==========================================");
+  serialDebugPrintln("==========================================");
+
+#if ENABLE_STATUS_RGB_LED
+  statusRgbBootTest();
+  statusRgbWrite(255, 0, 0);
+#endif
 
   initializeDisplay();
   initializeWiFi();
@@ -677,7 +744,7 @@ void setup() {
 
 #if ENABLE_I2S_PCM5102
   if (!i2s_audio_begin()) {
-    Serial.println("WARNING: I2S/PCM5102 init failed — check wiring and pins in settings.h");
+    serialDebugPrintln("WARNING: I2S/PCM5102 init failed — check wiring and pins in settings.h");
   } else if (i2s_audio_get_mode() == I2S_MODE_TACTILE) {
     i2s_audio_mute();
   }
@@ -694,5 +761,8 @@ void loop() {
     processOSCMessages();
   }
   updateGui();
+#if ENABLE_STATUS_RGB_LED
+  updateStatusRgbLed();
+#endif
   delay(1);
 }

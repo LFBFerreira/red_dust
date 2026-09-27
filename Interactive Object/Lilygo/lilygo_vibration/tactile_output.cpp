@@ -25,7 +25,7 @@ bool tactile_output_begin() {
     int pin = PWM_TACTILE_PINS[i];
     ledcAttach(pin, PWM_FREQUENCY, PWM_RESOLUTION);
     ledcWrite(pin, 0);
-    Serial.printf("PWM tactile Pin_%c GPIO %d (+ external RC to amplifier)\n", 'A' + i, pin);
+    serialDebugPrintf("PWM tactile Pin_%c GPIO %d (+ external RC to amplifier)\n", 'A' + i, pin);
   }
 
   return dacOk;

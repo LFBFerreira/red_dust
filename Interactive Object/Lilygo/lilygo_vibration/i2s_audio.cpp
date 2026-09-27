@@ -129,7 +129,7 @@ bool i2s_audio_begin() {
   i2sConfig.fixed_mclk = 0;
 
   if (i2s_driver_install(I2S_NUM_0, &i2sConfig, 0, nullptr) != ESP_OK) {
-    Serial.println("I2S: driver_install failed");
+    serialDebugPrintln("I2S: driver_install failed");
     return false;
   }
 
@@ -140,7 +140,7 @@ bool i2s_audio_begin() {
   pinConfig.data_in_num = I2S_PIN_NO_CHANGE;
 
   if (i2s_set_pin(I2S_NUM_0, &pinConfig) != ESP_OK) {
-    Serial.println("I2S: set_pin failed");
+    serialDebugPrintln("I2S: set_pin failed");
     i2s_driver_uninstall(I2S_NUM_0);
     return false;
   }
@@ -152,11 +152,11 @@ bool i2s_audio_begin() {
 
   s_ready = true;
   const char* modeName = (s_mode == I2S_MODE_TACTILE) ? "TACTILE" : "AUDIO";
-  Serial.printf("I2S -> PCM5102: %u Hz, BCK=%d WS=%d DOUT=%d, mode=%s",
+  serialDebugPrintf("I2S -> PCM5102: %u Hz, BCK=%d WS=%d DOUT=%d, mode=%s",
                 (unsigned)I2S_SAMPLE_RATE, I2S_BCK_PIN, I2S_WS_PIN, I2S_DOUT_PIN, modeName);
   if (s_mode == I2S_MODE_AUDIO) {
-    Serial.printf(", carrier %.1f Hz", s_carrierHz);
+    serialDebugPrintf(", carrier %.1f Hz", s_carrierHz);
   }
-  Serial.println();
+  serialDebugPrintln();
   return true;
 }

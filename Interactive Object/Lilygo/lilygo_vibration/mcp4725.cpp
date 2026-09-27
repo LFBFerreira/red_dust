@@ -15,10 +15,10 @@ bool mcp4725_begin() {
   for (int i = 0; i < MCP4725_COUNT; i++) {
     Wire.beginTransmission(MCP4725_I2C_ADDR[i]);
     if (Wire.endTransmission() != 0) {
-      Serial.printf("MCP4725[%d] not found at 0x%02X\n", i, MCP4725_I2C_ADDR[i]);
+      serialDebugPrintf("MCP4725[%d] not found at 0x%02X\n", i, MCP4725_I2C_ADDR[i]);
       ok = false;
     } else {
-      Serial.printf("MCP4725[%d] OK at 0x%02X (Pin_%c tactile)\n", i, MCP4725_I2C_ADDR[i],
+      serialDebugPrintf("MCP4725[%d] OK at 0x%02X (Pin_%c tactile)\n", i, MCP4725_I2C_ADDR[i],
                     'A' + i);
     }
   }
