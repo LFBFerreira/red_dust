@@ -2,20 +2,12 @@
 
 #include <Arduino.h>
 
-enum I2sOutputMode : uint8_t {
-  I2S_MODE_TACTILE = 0,  // DC level on I2S -> PCM5102 (exciter / haptic)
-  I2S_MODE_AUDIO = 1     // Carrier tone; levels = L/R amplitude
-};
-
 bool i2s_audio_begin();
 
-void i2s_audio_set_mode(I2sOutputMode mode);
-I2sOutputMode i2s_audio_get_mode();
-
-// Carrier for AUDIO mode (Hz)
+// Shake carrier frequency (Hz). OSC Pin_A/B set L/R volume over this tone.
 void i2s_audio_set_carrier_hz(float hz);
 
-// Pin_A -> left, Pin_B -> right (0..1). Used for TACTILE DC and AUDIO envelopes.
+// Pin_A -> left, Pin_B -> right (0..1) volume envelopes.
 void i2s_audio_set_stereo_levels(float left, float right);
 
 // Sets both channels (legacy / single-channel use)

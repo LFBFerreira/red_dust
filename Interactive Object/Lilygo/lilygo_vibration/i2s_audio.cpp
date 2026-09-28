@@ -4,9 +4,6 @@
 #include <driver/i2s.h>
 #include <math.h>
 
-static volatile I2sOutputMode s_mode =
-    (I2S_DEFAULT_OUTPUT_MODE == 1) ? I2S_MODE_AUDIO : I2S_MODE_TACTILE;
-
 static volatile float s_targetL = 0.0f;
 static volatile float s_targetR = 0.0f;
 static float s_currentL = 0.0f;
@@ -26,25 +23,9 @@ static float sanitizeLevel(float v) {
   return constrain(v, 0.0f, 1.0f);
 }
 
-static int16_t levelToPcm(float level) {
-  int32_t scaled = (int32_t)(sanitizeLevel(level) * 32767.0f * I2S_VOLUME_GAIN);
-  if (scaled > 32767) scaled = 32767;
-  if (scaled < 0) scaled = 0;
-  return (int16_t)scaled;
-}
-
-void i2s_audio_set_mode(I2sOutputMode mode) {
-  s_mode = mode;
-  if (mode == I2S_MODE_TACTILE) {
-    s_phase = 0.0f;
-  }
-}
-
-I2sOutputMode i2s_audio_get_mode() { return s_mode; }
-
 void i2s_audio_set_carrier_hz(float hz) {
-  if (hz < 20.0f) hz = 20.0f;
-  if (hz > 2000.0f) hz = 2000.0f;
+  if (hz < 15.0f) hz = 15.0f;
+  if (hz > 200.0f) hz = 200.0f;
   s_carrierHz = hz;
 }
 
@@ -74,36 +55,26 @@ static void audioStreamTask(void* /*param*/) {
     s_currentL += (s_targetL - s_currentL) * smooth;
     s_currentR += (s_targetR - s_currentR) * smooth;
 
-    const I2sOutputMode mode = s_mode;
     const float sampleRate = (float)I2S_SAMPLE_RATE;
     const float carrier = s_carrierHz;
     const float phaseStep = (2.0f * PI_F * carrier) / sampleRate;
 
-    if (mode == I2S_MODE_TACTILE) {
-      const int16_t pcmL = levelToPcm(s_currentL);
-      const int16_t pcmR = levelToPcm(s_currentR);
-      for (size_t i = 0; i < frameCount; i++) {
-        buffer[i * 2] = pcmL;
-        buffer[i * 2 + 1] = pcmR;
+    for (size_t i = 0; i < frameCount; i++) {
+      const float carrierSample = sinf(s_phase);
+      s_phase += phaseStep;
+      if (s_phase >= 2.0f * PI_F) {
+        s_phase -= 2.0f * PI_F;
       }
-    } else {
-      for (size_t i = 0; i < frameCount; i++) {
-        const float carrierSample = sinf(s_phase);
-        s_phase += phaseStep;
-        if (s_phase >= 2.0f * PI_F) {
-          s_phase -= 2.0f * PI_F;
-        }
 
-        int32_t left = (int32_t)(carrierSample * s_currentL * 32767.0f * I2S_VOLUME_GAIN);
-        int32_t right = (int32_t)(carrierSample * s_currentR * 32767.0f * I2S_VOLUME_GAIN);
-        if (left > 32767) left = 32767;
-        if (left < -32768) left = -32768;
-        if (right > 32767) right = 32767;
-        if (right < -32768) right = -32768;
+      int32_t left = (int32_t)(carrierSample * s_currentL * 32767.0f * I2S_VOLUME_GAIN);
+      int32_t right = (int32_t)(carrierSample * s_currentR * 32767.0f * I2S_VOLUME_GAIN);
+      if (left > 32767) left = 32767;
+      if (left < -32768) left = -32768;
+      if (right > 32767) right = 32767;
+      if (right < -32768) right = -32768;
 
-        buffer[i * 2] = (int16_t)left;
-        buffer[i * 2 + 1] = (int16_t)right;
-      }
+      buffer[i * 2] = (int16_t)left;
+      buffer[i * 2 + 1] = (int16_t)right;
     }
 
     i2s_write(I2S_NUM_0, buffer, sizeof(buffer), &bytesWritten, portMAX_DELAY);
@@ -151,12 +122,8 @@ bool i2s_audio_begin() {
   xTaskCreatePinnedToCore(audioStreamTask, "i2s_pcm", 4096, nullptr, 2, nullptr, 0);
 
   s_ready = true;
-  const char* modeName = (s_mode == I2S_MODE_TACTILE) ? "TACTILE" : "AUDIO";
-  serialDebugPrintf("I2S -> PCM5102: %u Hz, BCK=%d WS=%d DOUT=%d, mode=%s",
-                (unsigned)I2S_SAMPLE_RATE, I2S_BCK_PIN, I2S_WS_PIN, I2S_DOUT_PIN, modeName);
-  if (s_mode == I2S_MODE_AUDIO) {
-    serialDebugPrintf(", carrier %.1f Hz", s_carrierHz);
-  }
-  serialDebugPrintln();
+  serialDebugPrintf("I2S -> PCM5102 shake: %u Hz sample, BCK=%d WS=%d DOUT=%d, carrier %.1f Hz\n",
+                    (unsigned)I2S_SAMPLE_RATE, I2S_BCK_PIN, I2S_WS_PIN, I2S_DOUT_PIN,
+                    (double)s_carrierHz);
   return true;
 }

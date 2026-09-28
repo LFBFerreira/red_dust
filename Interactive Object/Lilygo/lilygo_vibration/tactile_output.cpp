@@ -1,8 +1,5 @@
 #include "tactile_output.h"
 #include "settings.h"
-#if ENABLE_MCP4725
-#include "mcp4725.h"
-#endif
 
 #include <esp_timer.h>
 #include <math.h>
@@ -58,18 +55,10 @@ static void tactileCarrierTick(void* /*arg*/) {
       s_smoothed[pin] += (target - s_smoothed[pin]) * smooth;
     }
 
-    if (route.type == TACTILE_ROUTE_MCP4725) {
-#if ENABLE_MCP4725
-      if (route.index < MCP4725_COUNT) {
-        mcp4725_write_level(route.index, s_smoothed[pin]);
-      }
-#endif
-    } else if (route.type == TACTILE_ROUTE_PWM) {
-      if (route.index < PWM_TACTILE_COUNT) {
-        int gpio = PWM_TACTILE_PINS[route.index];
-        int duty = active ? modulatedDuty(s_smoothed[pin], wave) : 0;
-        ledcWrite(gpio, duty);
-      }
+    if (route.type == TACTILE_ROUTE_PWM && route.index < PWM_TACTILE_COUNT) {
+      int gpio = PWM_TACTILE_PINS[route.index];
+      int duty = active ? modulatedDuty(s_smoothed[pin], wave) : 0;
+      ledcWrite(gpio, duty);
     }
   }
 }
@@ -77,11 +66,6 @@ static void tactileCarrierTick(void* /*arg*/) {
 
 bool tactile_output_begin() {
 #if ENABLE_TACTILE_OUTPUT
-  bool dacOk = true;
-#if ENABLE_MCP4725
-  dacOk = mcp4725_begin();
-#endif
-
   for (int i = 0; i < PWM_TACTILE_COUNT; i++) {
     int pin = PWM_TACTILE_PINS[i];
     ledcAttach(pin, PWM_FREQUENCY, PWM_RESOLUTION);
@@ -104,7 +88,7 @@ bool tactile_output_begin() {
   if (esp_timer_start_periodic(s_timer, periodUs) != ESP_OK) {
     return false;
   }
-  return dacOk;
+  return true;
 #else
   return false;
 #endif

@@ -1,25 +1,26 @@
-// Configuration settings
 #include "settings.h"
 #include "i2s_audio.h"
 #include "tactile_output.h"
 
-// TFT Display includes
 #include <TFT_eSPI.h>
-TFT_eSPI tft = TFT_eSPI();
-
-#include <TFT_eWidget.h>  // Widget library
-
-// WiFi Manager includes
+#include <TFT_eWidget.h>
 #include <FS.h>
 using fs::FS;
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <WiFiManager.h>
 #include <string.h>
+#include <math.h>
+
+// ---------------------------------------------------------------------------
+// Globals
+// ---------------------------------------------------------------------------
+
+TFT_eSPI tft = TFT_eSPI();
 WiFiManager wm;
+WiFiUDP udp;
 
 GraphWidget gr = GraphWidget(&tft);
-// One trace per pin slot (overlay on same graph)
 TraceWidget pinTrace0(&gr);
 TraceWidget pinTrace1(&gr);
 TraceWidget pinTrace2(&gr);
@@ -28,161 +29,63 @@ TraceWidget pinTrace4(&gr);
 TraceWidget pinTrace5(&gr);
 TraceWidget* const pinTraces[MAX_PINS] = {&pinTrace0, &pinTrace1, &pinTrace2,
                                           &pinTrace3, &pinTrace4, &pinTrace5};
-
 static const uint16_t TRACE_COLORS[MAX_PINS] = {TFT_RED,  TFT_GREEN,  TFT_YELLOW,
                                                 TFT_CYAN, TFT_MAGENTA, TFT_WHITE};
 
-// Graph configuration
-const float gxLow = 0.0;
-const float gxHigh = 200.0;
-const float gyLow = 0.0;
-const float gyHigh = 10.0;
+static const float gxLow = 0.0f;
+static const float gxHigh = 200.0f;
+static const float gyLow = 0.0f;
+static const float gyHigh = 10.0f;
+static float graphX = 0.0f;
+static bool graphInitialized = false;
 
-float graphX = 0.0;
-bool graphInitialized = false;
+static float latestPinValues[MAX_PINS] = {0};
+static float lastSnapshotForGui[MAX_PINS] = {NAN};
+static float latestValue = 0.0f;  // Pin_A (status bar)
 
-// Per-pin latest live values (0..1) and PWM; slots marked inactive stay at 0 here
-float latestPinValues[MAX_PINS] = {0};
-int pwmValues[MAX_PINS] = {0};
-float lastSnapshotForGui[MAX_PINS] = {NAN};
+static bool lastSerialConnected = false;
+static bool lastSerialReceiving = false;
+static bool lastOscReceiving = false;
+static float lastDisplayedValue = -1.0f;
+static bool wifiConnected = false;
+static bool lastWifiConnected = false;
+static String lastWifiStatusText = "";
 
-float latestValue = 0.0;  // Pin_A for status bar (legacy behavior)
-bool lastSerialConnected = false;
-bool lastSerialReceiving = false;
-bool lastOscReceiving = false;
-float lastDisplayedValue = -1.0;
+static String serialBuffer = "";
+static const int SERIAL_BUFFER_SIZE = 384;
+static const unsigned long SERIAL_TIMEOUT_MS = 1000;
+static const unsigned long SERIAL_RECEIVING_TIMEOUT = 500;
+static unsigned long lastSerialCharTime = 0;
+static bool serialConnected = false;
+static bool serialReceivingData = false;
 
-bool wifiConnected = false;
-bool lastWifiConnected = false;
-String lastWifiStatusText = "";
+static const int OSC_BUFFER_SIZE = 512;
+static uint8_t oscBuffer[OSC_BUFFER_SIZE];
+static bool oscReceivingData = false;
+static unsigned long lastOscTime = 0;
+static const unsigned long OSC_RECEIVING_TIMEOUT = 500;
 
-String serialBuffer = "";
-const int SERIAL_BUFFER_SIZE = 384;
-const unsigned long SERIAL_TIMEOUT_MS = 1000;
-unsigned long lastSerialCharTime = 0;
-bool serialConnected = false;
-bool serialReceivingData = false;
-const unsigned long SERIAL_RECEIVING_TIMEOUT = 500;
-
-WiFiUDP udp;
-const int OSC_BUFFER_SIZE = 512;
-uint8_t oscBuffer[OSC_BUFFER_SIZE];
-bool oscReceivingData = false;
-unsigned long lastOscTime = 0;
-const unsigned long OSC_RECEIVING_TIMEOUT = 500;
-
-bool hasPWMData = false;
+static bool hasLiveData = false;
 
 enum DataSource { SOURCE_SERIAL, SOURCE_OSC };
 
-int alignTo4Bytes(int offset) { return (offset + 3) & ~3; }
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
 
-int mapValueToPWM(float value) {
-  value = constrain(value, 0.0f, 1.0f);
-  int pwmValue = (int)(value * (PWM_MAX - PWM_MIN) + PWM_MIN);
-  return constrain(pwmValue, PWM_MIN, PWM_MAX);
-}
+static int alignTo4Bytes(int offset) { return (offset + 3) & ~3; }
 
-// Parse a single float token; returns false if token is not a plausible number (use 0.0)
-// Control lines (USB Serial): MODE,TAC | MODE,AUD | FREQ,120
-bool processControlMessage(const String& message) {
-  String msg = message;
-  msg.trim();
-  if (msg.length() == 0) {
+static bool isStreamActive() { return serialReceivingData || oscReceivingData; }
+
+static bool sanitizeLevel01(float* v) {
+  if (v == nullptr || isnan(*v) || isinf(*v) || *v < 0.0f || *v > 1.0f) {
     return false;
   }
-
-  if (msg.startsWith("MODE,") || msg.startsWith("MODE=")) {
-    int sep = msg.indexOf(',');
-    if (sep < 0) sep = msg.indexOf('=');
-    if (sep > 0 && sep < (int)msg.length() - 1) {
-      String modeStr = msg.substring(sep + 1);
-      modeStr.trim();
-      modeStr.toUpperCase();
-#if ENABLE_I2S_PCM5102
-      if (modeStr == "AUD" || modeStr == "AUDIO") {
-        i2s_audio_set_mode(I2S_MODE_AUDIO);
-        serialDebugPrintf("PCM5102 AUDIO: tone %.1f Hz, Pin_A=L Pin_B=R envelope\n", I2S_CARRIER_HZ);
-      } else if (modeStr == "TAC" || modeStr == "TACTILE") {
-        i2s_audio_set_mode(I2S_MODE_TACTILE);
-        i2s_audio_mute();
-        serialDebugPrintln("PCM5102 muted; tactile on MCP4725 (A,B) + PWM+RC (C,D) -> HW-104");
-      } else {
-        serialDebugPrintln("Unknown MODE (use TAC or AUD)");
-      }
-#else
-      serialDebugPrintln("PCM5102 disabled in settings.h");
-#endif
-    }
-    return true;
-  }
-
-  if (msg.startsWith("FREQ,") || msg.startsWith("FREQ=")) {
-    int sep = msg.indexOf(',');
-    if (sep < 0) sep = msg.indexOf('=');
-    if (sep > 0 && sep < (int)msg.length() - 1) {
-      String fStr = msg.substring(sep + 1);
-      fStr.trim();
-      int hz = fStr.toInt();
-      if (fStr.length() > 0 && hz > 0) {
-#if ENABLE_I2S_PCM5102
-        i2s_audio_set_carrier_hz((float)hz);
-        serialDebugPrintf("PCM5102 tone frequency set to %d Hz\n", hz);
-#endif
-#if ENABLE_TACTILE_OUTPUT
-        tactile_output_set_carrier_hz((float)hz);
-        serialDebugPrintf("PWM tactile carrier set to %.0f Hz\n",
-                          (double)tactile_output_get_carrier_hz());
-#endif
-      }
-    }
-    return true;
-  }
-
-  return false;
+  *v = constrain(*v, 0.0f, 1.0f);
+  return true;
 }
 
-void updateTactileOutputs() {
-#if ENABLE_TACTILE_OUTPUT
-  for (int i = 0; i < MAX_PINS; i++) {
-    tactile_output_set_level(i, latestPinValues[i]);
-  }
-  tactile_output_apply(hasPWMData);
-#endif
-}
-
-void silenceOutputsOnStreamIdle() {
-  // Keep driving while either Serial (USB) or OSC is still streaming.
-  if (serialReceivingData || oscReceivingData) {
-    return;
-  }
-  if (!hasPWMData) {
-    return;
-  }
-  for (int i = 0; i < MAX_PINS; i++) {
-    latestPinValues[i] = 0.0f;
-    pwmValues[i] = 0;
-  }
-  latestValue = 0.0f;
-  hasPWMData = false;
-  updateTactileOutputs();
-#if ENABLE_I2S_PCM5102
-  i2s_audio_mute();
-#endif
-}
-
-void updatePcm5102FromPinValues() {
-#if ENABLE_I2S_PCM5102
-  if (i2s_audio_get_mode() != I2S_MODE_AUDIO) {
-    return;
-  }
-  float left = latestPinValues[I2S_LEFT_PIN_INDEX];
-  float right = latestPinValues[I2S_RIGHT_PIN_INDEX];
-  i2s_audio_set_stereo_levels(left, right);
-#endif
-}
-
-bool parseFloatToken(const String& token, float* out) {
+static bool parseFloatToken(const String& token, float* out) {
   if (token.length() == 0) {
     *out = 0.0f;
     return false;
@@ -196,17 +99,107 @@ bool parseFloatToken(const String& token, float* out) {
   return true;
 }
 
-void restartGraphTraces() {
-  if (!graphInitialized) return;
+// "FREQ,32" / "FREQ=32" -> hz; returns false if not this command or invalid.
+static bool parsePrefixedIntCommand(const String& message, const char* key, int* outHz) {
+  String msg = message;
+  msg.trim();
+  const size_t keyLen = strlen(key);
+  if (msg.length() <= (int)keyLen + 1) {
+    return false;
+  }
+  if (!msg.startsWith(key)) {
+    return false;
+  }
+  char sep = msg.charAt(keyLen);
+  if (sep != ',' && sep != '=') {
+    return false;
+  }
+  String rest = msg.substring(keyLen + 1);
+  rest.trim();
+  if (rest.length() == 0) {
+    return false;
+  }
+  int hz = rest.toInt();
+  if (hz <= 0) {
+    return false;
+  }
+  *outHz = hz;
+  return true;
+}
+
+static void clearLivePinValues() {
+  for (int i = 0; i < MAX_PINS; i++) {
+    latestPinValues[i] = 0.0f;
+  }
+  latestValue = 0.0f;
+  hasLiveData = false;
+}
+
+static void pushOutputs() {
+#if ENABLE_TACTILE_OUTPUT
+  for (int i = 0; i < MAX_PINS; i++) {
+    tactile_output_set_level(i, latestPinValues[i]);
+  }
+  tactile_output_apply(hasLiveData);
+#endif
+#if ENABLE_I2S_PCM5102
+  if (hasLiveData) {
+    i2s_audio_set_stereo_levels(latestPinValues[I2S_LEFT_PIN_INDEX],
+                                latestPinValues[I2S_RIGHT_PIN_INDEX]);
+  } else {
+    i2s_audio_mute();
+  }
+#endif
+}
+
+static void captureGuiSnapshot(const String& wifiStatusText) {
+  lastSerialConnected = serialConnected;
+  lastSerialReceiving = serialReceivingData;
+  lastOscReceiving = oscReceivingData;
+  lastDisplayedValue = latestValue;
+  for (int i = 0; i < MAX_PINS; i++) {
+    lastSnapshotForGui[i] = latestPinValues[i];
+  }
+  lastWifiStatusText = wifiStatusText;
+  lastWifiConnected = wifiConnected;
+}
+
+static void restartGraphTraces() {
+  if (!graphInitialized) {
+    return;
+  }
   gr.drawGraph(10, 25);
   for (int i = 0; i < MAX_PINS; i++) {
     pinTraces[i]->startTrace(TRACE_COLORS[i]);
   }
 }
 
-// Apply one frame: incoming[0..incomingCount-1] from wire; [0,1] = live level;
-// outside that range = inactive slot (do not treat as real control). Missing tail: 0.
-void applyPinFrame(const float* incoming, int incomingCount, DataSource source) {
+static void setShakeCarrierHz(float hz) {
+#if ENABLE_I2S_PCM5102
+  i2s_audio_set_carrier_hz(hz);
+  serialDebugPrintf("PCM5102 shake carrier set to %.0f Hz\n", (double)hz);
+#endif
+#if ENABLE_TACTILE_OUTPUT
+  tactile_output_set_carrier_hz(hz);
+  serialDebugPrintf("PWM tactile carrier set to %.0f Hz\n",
+                    (double)tactile_output_get_carrier_hz());
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Output / frame path
+// ---------------------------------------------------------------------------
+
+static void silenceOutputsOnStreamIdle() {
+  if (isStreamActive() || !hasLiveData) {
+    return;
+  }
+  clearLivePinValues();
+  pushOutputs();
+}
+
+// Apply one frame: incoming[0..count-1]; [0,1] = live; out of range = inactive.
+static void applyPinFrame(const float* incoming, int incomingCount, DataSource source) {
   if (incomingCount < 0) incomingCount = 0;
   if (incomingCount > MAX_PINS) incomingCount = MAX_PINS;
 
@@ -218,55 +211,54 @@ void applyPinFrame(const float* incoming, int incomingCount, DataSource source) 
   bool slotLive[MAX_PINS] = {false};
   for (int i = 0; i < MAX_PINS; i++) {
     float v = (incoming != nullptr && i < incomingCount) ? incoming[i] : 0.0f;
-    if (isnan(v) || isinf(v)) v = 0.0f;
-    if (v < 0.0f || v > 1.0f) {
+    if (!sanitizeLevel01(&v)) {
       latestPinValues[i] = 0.0f;
-      pwmValues[i] = mapValueToPWM(0.0f);
       slotLive[i] = false;
       continue;
     }
-    v = constrain(v, 0.0f, 1.0f);
     slotLive[i] = true;
     latestPinValues[i] = v;
-    pwmValues[i] = mapValueToPWM(v);
   }
-  hasPWMData = true;
+  hasLiveData = true;
   latestValue = latestPinValues[0];
+  pushOutputs();
 
-  updateTactileOutputs();
-  updatePcm5102FromPinValues();
+  if (!graphInitialized) {
+    return;
+  }
 
-  if (graphInitialized) {
-    static int sLastIncomingCount = -1;
-    if (sLastIncomingCount >= 0 && incomingCount < sLastIncomingCount) {
-      restartGraphTraces();
-    }
-    sLastIncomingCount = incomingCount;
+  static int sLastIncomingCount = -1;
+  if (sLastIncomingCount >= 0 && incomingCount < sLastIncomingCount) {
+    restartGraphTraces();
+  }
+  sLastIncomingCount = incomingCount;
 
-    // Only plot traces for slots present in this frame (typetag float count).
-    // Otherwise extra traces keep advancing (often at y=0) after channel count drops.
-    // Skip inactive (out-of-range) wire values so padding does not draw a trace.
-    for (int i = 0; i < incomingCount && i < MAX_PINS; i++) {
-      if (!slotLive[i]) continue;
-      float graphValue = latestPinValues[i] * 10.0f;
-      pinTraces[i]->addPoint(graphX, graphValue);
-    }
-    graphX += 1.0f;
-    if (graphX > gxHigh) {
-      graphX = 0.0f;
-      restartGraphTraces();
-    }
+  for (int i = 0; i < incomingCount && i < MAX_PINS; i++) {
+    if (!slotLive[i]) continue;
+    pinTraces[i]->addPoint(graphX, latestPinValues[i] * 10.0f);
+  }
+  graphX += 1.0f;
+  if (graphX > gxHigh) {
+    graphX = 0.0f;
+    restartGraphTraces();
   }
 }
 
-void handleSerialFrame(const float* values, int count, const String& /*timestamp*/) {
-  serialReceivingData = true;
-  lastSerialCharTime = millis();
-  applyPinFrame(values, count, SOURCE_SERIAL);
+// ---------------------------------------------------------------------------
+// Serial
+// ---------------------------------------------------------------------------
+
+static bool processControlMessage(const String& message) {
+  int hz = 0;
+  if (!parsePrefixedIntCommand(message, "FREQ", &hz)) {
+    return false;
+  }
+  setShakeCarrierHz((float)hz);
+  return true;
 }
 
-// Serial line: v1,v2,...,vN,timestamp  (last comma separates timestamp)
-void processSerialMessage(const String& message) {
+// Line: v1,v2,...,vN,timestamp  (last comma separates timestamp)
+static void processSerialMessage(const String& message) {
   if (processControlMessage(message)) {
     return;
   }
@@ -295,26 +287,24 @@ void processSerialMessage(const String& message) {
     if (i == (int)valuesPart.length() || valuesPart.charAt(i) == ',') {
       String token = valuesPart.substring(start, i);
       token.trim();
-      if (token.length() > 0) {
+      if (token.length() > 0 && n < MAX_PINS) {
         float v;
         parseFloatToken(token, &v);
-        if (n < MAX_PINS) {
-          values[n++] = v;
-        }
-        // ignore extra tokens beyond MAX_PINS (sender may send more)
+        values[n++] = v;
       }
       start = i + 1;
     }
   }
-
   if (n == 0) {
     return;
   }
 
-  handleSerialFrame(values, n, timestamp);
+  serialReceivingData = true;
+  lastSerialCharTime = millis();
+  applyPinFrame(values, n, SOURCE_SERIAL);
 }
 
-void processSerialMessages() {
+static void processSerialMessages() {
   if (Serial.available() > 0) {
     lastSerialCharTime = millis();
     serialConnected = true;
@@ -322,7 +312,6 @@ void processSerialMessages() {
 
     while (Serial.available() > 0) {
       char c = Serial.read();
-
       if (c == '\n' || c == '\r') {
         serialBuffer += '\n';
       } else if (c >= 32 && c <= 126) {
@@ -342,36 +331,31 @@ void processSerialMessages() {
           break;
         }
       }
-
       String latestMessage = serialBuffer.substring(messageStart, lastNewline);
       if (latestMessage.length() > 0) {
         processSerialMessage(latestMessage);
       }
-
-      if (lastNewline < (int)serialBuffer.length() - 1) {
-        serialBuffer = serialBuffer.substring(lastNewline + 1);
-      } else {
-        serialBuffer = "";
-      }
+      serialBuffer = (lastNewline < (int)serialBuffer.length() - 1)
+                         ? serialBuffer.substring(lastNewline + 1)
+                         : String("");
     }
   }
 
   if (serialReceivingData && (millis() - lastSerialCharTime) > SERIAL_RECEIVING_TIMEOUT) {
     serialReceivingData = false;
   }
-
-  if (serialBuffer.length() > 0 &&
-      (millis() - lastSerialCharTime) > SERIAL_TIMEOUT_MS) {
+  if (serialBuffer.length() > 0 && (millis() - lastSerialCharTime) > SERIAL_TIMEOUT_MS) {
     serialBuffer = "";
   }
 }
 
-bool isSerialConnected() { return serialConnected; }
-bool isSerialReceiving() { return serialReceivingData; }
+// ---------------------------------------------------------------------------
+// OSC
+// ---------------------------------------------------------------------------
 
-// OSC: typetag ,f...fs (>=0 floats, then timestamp string). Path must match OSC_PATH.
-bool parseOSCMessageMulti(uint8_t* buffer, int packetSize, float* outValues, int maxValues,
-                         int* outFloatCount) {
+// Typetag ,f...fs (>=0 floats, then timestamp string). Path must match OSC_PATH.
+static bool parseOSCMessageMulti(uint8_t* buffer, int packetSize, float* outValues,
+                                 int maxValues, int* outFloatCount) {
   *outFloatCount = 0;
   if (packetSize < 8) return false;
 
@@ -387,9 +371,7 @@ bool parseOSCMessageMulti(uint8_t* buffer, int packetSize, float* outValues, int
   }
 
   offset = alignTo4Bytes(offset + pathLen + 1);
-  if (offset >= packetSize) return false;
-
-  if (buffer[offset] != ',') return false;
+  if (offset >= packetSize || buffer[offset] != ',') return false;
 
   int p = offset + 1;
   int fCount = 0;
@@ -403,8 +385,7 @@ bool parseOSCMessageMulti(uint8_t* buffer, int packetSize, float* outValues, int
     p++;
   }
   if (p >= packetSize) return false;
-  p++;
-  offset = alignTo4Bytes(p);
+  offset = alignTo4Bytes(p + 1);
 
   for (int fi = 0; fi < fCount; fi++) {
     if (offset + 4 > packetSize) return false;
@@ -427,32 +408,28 @@ bool parseOSCMessageMulti(uint8_t* buffer, int packetSize, float* outValues, int
     offset++;
   }
   if (offset >= packetSize) return false;
-  offset++;
-  offset = alignTo4Bytes(offset);
+  offset = alignTo4Bytes(offset + 1);
 
   *outFloatCount = fCount;
   return true;
 }
 
-void processOSCMessages() {
+static void processOSCMessages() {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
 
   int latestPacketSize = 0;
   int packetCount = 0;
-
   while (true) {
     int packetSize = udp.parsePacket();
     if (packetSize <= 0) break;
     packetCount++;
-
     if (packetSize > OSC_BUFFER_SIZE) {
       serialDebugPrintf("OSC packet too large: %d bytes\n", packetSize);
       while (udp.available()) udp.read();
       continue;
     }
-
     int len = udp.read(oscBuffer, OSC_BUFFER_SIZE);
     if (len > 0) {
       latestPacketSize = len;
@@ -466,12 +443,10 @@ void processOSCMessages() {
     float oscVals[MAX_PINS];
     int fcnt = 0;
     if (parseOSCMessageMulti(oscBuffer, latestPacketSize, oscVals, MAX_PINS, &fcnt)) {
-      int use = (fcnt < MAX_PINS) ? fcnt : MAX_PINS;
-      applyPinFrame(oscVals, use, SOURCE_OSC);
+      applyPinFrame(oscVals, (fcnt < MAX_PINS) ? fcnt : MAX_PINS, SOURCE_OSC);
     } else {
       serialDebugPrintln("Failed to parse OSC message");
     }
-
     if (packetCount > 1) {
       serialDebugPrintf("Discarded %d OSC packets, processed latest\n", packetCount - 1);
     }
@@ -482,8 +457,12 @@ void processOSCMessages() {
   }
 }
 
-void updateGui() {
-  String wifiStatusText = "";
+// ---------------------------------------------------------------------------
+// GUI / status LED
+// ---------------------------------------------------------------------------
+
+static void updateGui() {
+  String wifiStatusText;
   int wifiStatusColor = TFT_WHITE;
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -494,14 +473,9 @@ void updateGui() {
     wifiStatusColor = TFT_YELLOW;
   } else {
     String ssid = WiFi.SSID();
-    if (ssid.length() > 0) {
-      wifiStatusText = "Connecting: " + ssid;
-    } else {
-      wifiStatusText = "Connecting...";
-    }
+    wifiStatusText = (ssid.length() > 0) ? ("Connecting: " + ssid) : String("Connecting...");
     wifiStatusColor = TFT_CYAN;
   }
-
   if (wifiStatusText.length() > 14) {
     wifiStatusText = wifiStatusText.substring(0, 11) + "...";
   }
@@ -515,44 +489,35 @@ void updateGui() {
     }
   }
 
-  bool isReceivingData = serialReceivingData || oscReceivingData;
-  bool needsUpdate = false;
-  if (serialConnected != lastSerialConnected || serialReceivingData != lastSerialReceiving ||
+  const bool receiving = isStreamActive();
+  const bool needsUpdate =
+      serialConnected != lastSerialConnected || serialReceivingData != lastSerialReceiving ||
       oscReceivingData != lastOscReceiving || pinsChanged || wifiStatusText != lastWifiStatusText ||
-      wifiConnected != lastWifiConnected || fabs(latestValue - lastDisplayedValue) > 0.0001f) {
-    needsUpdate = true;
-  }
-
+      wifiConnected != lastWifiConnected || fabs(latestValue - lastDisplayedValue) > 0.0001f;
   if (!needsUpdate) {
     return;
   }
 
-  float displayValue = constrain(latestValue, 0.0f, 1.0f);
-  const char* pcmMode = "PCM-off";
+  const char* outPath =
 #if ENABLE_I2S_PCM5102
-  pcmMode = (i2s_audio_get_mode() == I2S_MODE_TACTILE) ? "PCM-mute" : "PCM-AUD";
+      "PCM5102";
+#elif ENABLE_TACTILE_OUTPUT
+      "PWM";
+#else
+      "off";
 #endif
   serialDebugPrintf("[status] %s | %s | %s | A=%.3f B=%.3f C=%.3f D=%.3f\n", wifiStatusText.c_str(),
-                isReceivingData ? "Active" : "Idle", pcmMode, latestPinValues[0],
-                latestPinValues[1], latestPinValues[2], latestPinValues[3]);
+                    receiving ? "Active" : "Idle", outPath, latestPinValues[0], latestPinValues[1],
+                    latestPinValues[2], latestPinValues[3]);
 
 #if ACTIVE_BOARD != BOARD_TTGO_T_DISPLAY
-  lastSerialConnected = serialConnected;
-  lastSerialReceiving = serialReceivingData;
-  lastOscReceiving = oscReceivingData;
-  lastDisplayedValue = latestValue;
-  for (int i = 0; i < MAX_PINS; i++) {
-    lastSnapshotForGui[i] = latestPinValues[i];
-  }
-  lastWifiStatusText = wifiStatusText;
-  lastWifiConnected = wifiConnected;
+  captureGuiSnapshot(wifiStatusText);
   return;
-#endif
+#else
+  float displayValue = constrain(latestValue, 0.0f, 1.0f);
 
   tft.setTextFont(2);
   tft.setTextSize(1);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK, true);
-
   tft.fillRect(0, 0, 240, 20, TFT_BLACK);
 
   tft.setCursor(5, 5);
@@ -560,36 +525,14 @@ void updateGui() {
   tft.print(wifiStatusText);
 
   tft.setCursor(120, 5);
-  if (isReceivingData) {
-    tft.setTextColor(TFT_CYAN, TFT_BLACK, true);
-    tft.print("Active");
-  } else {
-    tft.setTextColor(TFT_YELLOW, TFT_BLACK, true);
-    tft.print("Idle");
-  }
+  tft.setTextColor(receiving ? TFT_CYAN : TFT_YELLOW, TFT_BLACK, true);
+  tft.print(receiving ? "Active" : "Idle");
 
   tft.setCursor(190, 5);
   tft.setTextColor(TFT_WHITE, TFT_BLACK, true);
   tft.print(displayValue, 3);
 
-  lastSerialConnected = serialConnected;
-  lastSerialReceiving = serialReceivingData;
-  lastOscReceiving = oscReceivingData;
-  lastDisplayedValue = latestValue;
-  for (int i = 0; i < MAX_PINS; i++) {
-    lastSnapshotForGui[i] = latestPinValues[i];
-  }
-  lastWifiStatusText = wifiStatusText;
-  lastWifiConnected = wifiConnected;
-}
-
-void updateVibrationMotor() {
-  silenceOutputsOnStreamIdle();
-  updateTactileOutputs();
-#if ENABLE_I2S_PCM5102
-  if (!hasPWMData) {
-    i2s_audio_mute();
-  }
+  captureGuiSnapshot(wifiStatusText);
 #endif
 }
 
@@ -605,12 +548,10 @@ static void statusRgbWrite(uint8_t r, uint8_t g, uint8_t b) {
   s_statusLedR = r;
   s_statusLedG = g;
   s_statusLedB = b;
-  // Built-in WS2812; RMT timing breaks if spammed every loop with WiFi on.
   neopixelWrite(STATUS_RGB_LED_PIN, r, g, b);
 }
 
 static void statusRgbBootTest() {
-  // Visible boot flash so we can tell pin/driver work before WiFi starts.
   neopixelWrite(STATUS_RGB_LED_PIN, 0, 0, 0);
   delay(50);
   neopixelWrite(STATUS_RGB_LED_PIN, 255, 0, 0);
@@ -623,33 +564,32 @@ static void statusRgbBootTest() {
   s_statusLedR = s_statusLedG = s_statusLedB = 0;
 }
 
-void updateStatusRgbLed() {
-  // Serial or OSC (WiFi) both count as "receiving"
-  if (!serialReceivingData && !oscReceivingData) {
-    statusRgbWrite(255, 0, 0);  // red = idle
+static void updateStatusRgbLed() {
+  if (!isStreamActive()) {
+    statusRgbWrite(255, 0, 0);
     return;
   }
-  float level = constrain(latestPinValues[0], 0.0f, 1.0f);
-  uint8_t blue = (uint8_t)(level * 255.0f);
-  // Keep a dim blue floor so "receiving at 0" is still visible vs idle red.
-  if (blue < 16) {
-    blue = 16;
-  }
-  statusRgbWrite(0, 0, blue);  // blue intensity = Pin_A
+  uint8_t blue = (uint8_t)(constrain(latestPinValues[0], 0.0f, 1.0f) * 255.0f);
+  if (blue < 16) blue = 16;
+  statusRgbWrite(0, 0, blue);
 }
 #endif
 
-void initializeDisplay() {
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+
+static void initializeDisplay() {
 #if ACTIVE_BOARD == BOARD_TTGO_T_DISPLAY
   pinMode(4, OUTPUT);
-  digitalWrite(4, HIGH);  // Backlight on first (TTGO T-Display = GPIO 4)
+  digitalWrite(4, HIGH);
   serialDebugPrintln("Backlight: GPIO 4 HIGH");
 
   tft.init();
   tft.setRotation(3);
 #if DISPLAY_BOOT_TEST
   tft.fillScreen(TFT_RED);
-  delay(400);  // If you see red briefly, TFT works; if always dark, see README TFT_eSPI setup
+  delay(400);
 #endif
   tft.fillScreen(TFT_BLACK);
 
@@ -657,51 +597,43 @@ void initializeDisplay() {
   gr.setGraphScale(gxLow, gxHigh, gyLow, gyHigh);
   gr.setGraphGrid(gxLow, 1000, gyLow, 2, GRAPH_GRID_COLOR);
   gr.drawGraph(10, 25);
-
   for (int i = 0; i < MAX_PINS; i++) {
     pinTraces[i]->startTrace(TRACE_COLORS[i]);
   }
 
   graphInitialized = true;
-  graphX = 0.0;
-
-  latestValue = 0.0;
+  graphX = 0.0f;
+  clearLivePinValues();
   for (int i = 0; i < MAX_PINS; i++) {
-    latestPinValues[i] = 0.0f;
-    pwmValues[i] = 0;
     lastSnapshotForGui[i] = NAN;
   }
   lastSerialConnected = false;
   lastSerialReceiving = false;
   lastOscReceiving = false;
-  lastDisplayedValue = -1.0;
+  lastDisplayedValue = -1.0f;
   lastWifiConnected = false;
   lastWifiStatusText = "";
   wifiConnected = false;
 
   updateGui();
-
   serialDebugPrintln("TFT display and graph initialized (multi-pin overlay)");
 #else
-  // DevKitC-1 has no TFT; do not touch GPIO4 (Pin_A PWM on that board).
+  // DevKitC-1 has no TFT; do not touch GPIO4 (PWM Pin_A on that board).
   graphInitialized = false;
 #endif
 }
 
-void initializeWiFi() {
+static void initializeWiFi() {
   WiFi.mode(WIFI_STA);
-
   wm.setConfigPortalBlocking(false);
   wm.setConfigPortalTimeout(300);
   wm.setConnectTimeout(5);
   wm.setSaveConnectTimeout(10);
 
-  bool wifiStarted = wm.autoConnect("Red_Dust_Object");
-
-  if (wifiStarted) {
+  if (wm.autoConnect("Red_Dust_Object")) {
     serialDebugPrintln("WiFi connected immediately");
-    serialDebugPrintf("OSC listening on UDP port %d, path: %s (multi-float + timestamp)\n", OSC_PORT,
-                  OSC_PATH);
+    serialDebugPrintf("OSC listening on UDP port %d, path: %s (multi-float + timestamp)\n",
+                      OSC_PORT, OSC_PATH);
     wifiConnected = true;
     udp.begin(OSC_PORT);
   } else {
@@ -710,44 +642,60 @@ void initializeWiFi() {
   }
 }
 
-void initializeTactileOutputs() {
+static void updateWiFiStatus() {
+  bool connected = (WiFi.status() == WL_CONNECTED);
+  if (connected == wifiConnected) {
+    return;
+  }
+  wifiConnected = connected;
+  if (wifiConnected) {
+    serialDebugPrintln("WiFi connected");
+    serialDebugPrintf("OSC listening on UDP port %d, path: %s\n", OSC_PORT, OSC_PATH);
+    udp.begin(OSC_PORT);
+  } else {
+    serialDebugPrintln("WiFi disconnected");
+  }
+}
+
+static void initializeOutputs() {
+#if ENABLE_I2S_PCM5102
+  if (!i2s_audio_begin()) {
+    serialDebugPrintln("WARNING: I2S/PCM5102 init failed — check wiring and pins in settings.h");
+  }
+#endif
 #if ENABLE_TACTILE_OUTPUT
   if (!tactile_output_begin()) {
-    serialDebugPrintln("WARNING: MCP4725 init failed — check I2C wiring and addresses 0x60/0x61");
+    serialDebugPrintln("WARNING: PWM tactile init failed — check PWM pins in settings.h");
   }
 #endif
 }
 
-void updateWiFiStatus() {
-  bool currentWifiStatus = (WiFi.status() == WL_CONNECTED);
-  if (currentWifiStatus != wifiConnected) {
-    wifiConnected = currentWifiStatus;
-    if (wifiConnected) {
-      serialDebugPrintln("WiFi connected");
-      serialDebugPrintf("OSC listening on UDP port %d, path: %s\n", OSC_PORT, OSC_PATH);
-      udp.begin(OSC_PORT);
-    } else {
-      serialDebugPrintln("WiFi disconnected");
-    }
-  }
+static void printBootBanner() {
+  serialDebugPrintln("\nRed Dust Interactive Object (multi-pin)");
+  serialDebugPrintln("Serial: v1[,v2,...],timestamp  (last comma = timestamp; up to MAX_PINS values)");
+  serialDebugPrintln("OSC: base path + typetag ,f...fs + floats BE + timestamp string");
+#if ENABLE_I2S_PCM5102
+  serialDebugPrintf("I2S -> PCM5102 shake: Pin_A=L Pin_B=R, carrier %.0f Hz (C–F unused)\n",
+                    (double)I2S_CARRIER_HZ);
+#endif
+#if ENABLE_TACTILE_OUTPUT
+  serialDebugPrintf("Tactile: PWM GPIOs + %.0f Hz carrier (see settings.h)\n",
+                    (double)PWM_TACTILE_CARRIER_HZ);
+#endif
+#if ENABLE_I2S_PCM5102 || ENABLE_TACTILE_OUTPUT
+  serialDebugPrintln("Serial command: FREQ,<Hz>");
+#endif
+  serialDebugPrintln("==========================================");
 }
+
+// ---------------------------------------------------------------------------
+// Arduino entry
+// ---------------------------------------------------------------------------
 
 void setup() {
   Serial.begin(SERIAL_BAUDRATE);
   delay(500);
-
-  serialDebugPrintln("\nRed Dust Interactive Object (multi-pin)");
-  serialDebugPrintln("Serial: v1[,v2,...],timestamp  (last comma = timestamp; up to MAX_PINS values)");
-  serialDebugPrintln("OSC: base path + typetag ,f...fs + floats BE + timestamp string");
-#if ENABLE_I2S_AUDIO
-  serialDebugPrintln("I2S -> PCM5102: Pin_A=L, Pin_B=R (TACTILE=DC level, AUDIO=tone)");
-  serialDebugPrintln("Serial commands: MODE,TAC | MODE,AUD | FREQ,<Hz>");
-#endif
-#if ENABLE_PWM_OUTPUT
-  serialDebugPrintf("Tactile: PWM GPIOs + %.0f Hz carrier (see settings.h)\n",
-                    (double)PWM_TACTILE_CARRIER_HZ);
-#endif
-  serialDebugPrintln("==========================================");
+  printBootBanner();
 
 #if ENABLE_STATUS_RGB_LED
   statusRgbBootTest();
@@ -758,28 +706,15 @@ void setup() {
   initializeWiFi();
 
   serialBuffer.reserve(SERIAL_BUFFER_SIZE);
-
   serialConnected = false;
   serialReceivingData = false;
-  hasPWMData = false;
-  for (int i = 0; i < MAX_PINS; i++) {
-    pwmValues[i] = 0;
-    latestPinValues[i] = 0.0f;
-  }
-
-#if ENABLE_I2S_PCM5102
-  if (!i2s_audio_begin()) {
-    serialDebugPrintln("WARNING: I2S/PCM5102 init failed — check wiring and pins in settings.h");
-  } else if (i2s_audio_get_mode() == I2S_MODE_TACTILE) {
-    i2s_audio_mute();
-  }
-#endif
-  initializeTactileOutputs();
+  clearLivePinValues();
+  initializeOutputs();
 }
 
 void loop() {
   processSerialMessages();
-  updateVibrationMotor();
+  silenceOutputsOnStreamIdle();
   wm.process();
   updateWiFiStatus();
   if (wifiConnected) {

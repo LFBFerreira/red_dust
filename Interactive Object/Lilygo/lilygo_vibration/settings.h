@@ -1,17 +1,29 @@
 // Configuration settings for Lilygo Vibration Controller
-// 6 transducers (Pin_A .. Pin_F), all driven via PWM+RC -> amplifiers -> exciters
+// Output path chooses PWM+RC (up to 6 channels) or PCM5102 stereo shake (Pin_A/B only).
 
-// --- Board select (PWM pin map) ---
+// --- Board select (PWM / I2S pin maps) ---
 // 0 = LilyGo TTGO T-Display (classic ESP32)
 // 1 = ESP32-S3-DevKitC-1 (dual USB-C UART/USB; typically WROOM-1 module)
 #define BOARD_TTGO_T_DISPLAY 0
 #define BOARD_ESP32_S3_DEVKITC_1 1
 #define ACTIVE_BOARD BOARD_ESP32_S3_DEVKITC_1
 
-// --- Feature switches ---
-#define ENABLE_TACTILE_OUTPUT 1   // PWM+RC -> amplifier inputs
-#define ENABLE_I2S_PCM5102 0      // No audio/bone-conduction path; all channels are PWM tactile
-#define ENABLE_MCP4725 0          // No DAC channels anymore; everything is PWM+RC
+// --- Output path (compile-time) ---
+// 0 = Pin_A..F PWM+RC -> amplifiers -> exciters
+// 1 = Pin_A=L Pin_B=R I2S -> PCM5102 -> HW-104 -> shakers (C–F unused)
+#define OUTPUT_PATH_PWM_RC 0
+#define OUTPUT_PATH_PCM5102 1
+#define ACTIVE_OUTPUT_PATH OUTPUT_PATH_PCM5102
+
+#if ACTIVE_OUTPUT_PATH == OUTPUT_PATH_PCM5102
+#define ENABLE_I2S_PCM5102 1
+#define ENABLE_TACTILE_OUTPUT 0
+#elif ACTIVE_OUTPUT_PATH == OUTPUT_PATH_PWM_RC
+#define ENABLE_I2S_PCM5102 0
+#define ENABLE_TACTILE_OUTPUT 1
+#else
+#error "Set ACTIVE_OUTPUT_PATH to OUTPUT_PATH_PWM_RC or OUTPUT_PATH_PCM5102"
+#endif
 
 // Onboard WS2812 status LED (DevKitC-1 only): red = idle, blue = Pin_A while serial/OSC active
 #if ACTIVE_BOARD == BOARD_ESP32_S3_DEVKITC_1
@@ -25,19 +37,8 @@
 // RDCC slots (Pin_A .. Pin_F)
 #define MAX_PINS 6
 
-// --- MCP4725 DAC (disabled; kept for backward compatibility) ---
-#if ENABLE_MCP4725
-#define MCP4725_COUNT 1
-static const uint8_t MCP4725_I2C_ADDR[MCP4725_COUNT] = {0x60};
-#define I2C_SDA_PIN 21
-#define I2C_SCL_PIN 15
-#else
-#define MCP4725_COUNT 0
-#endif
-
-
 // --- PWM+RC outputs: one GPIO per channel (Pin_A .. Pin_F) ---
-// All pins must be PWM-capable, output-capable, and free on the selected board.
+// Used when ACTIVE_OUTPUT_PATH == OUTPUT_PATH_PWM_RC.
 #define PWM_TACTILE_COUNT 6
 
 #if ACTIVE_BOARD == BOARD_ESP32_S3_DEVKITC_1
@@ -52,9 +53,6 @@ static const int PWM_TACTILE_PINS[PWM_TACTILE_COUNT] = {25, 26, 27, 32, 33, 13};
 #error "Set ACTIVE_BOARD to BOARD_ESP32_S3_DEVKITC_1 or BOARD_TTGO_T_DISPLAY"
 #endif
 
-// Per Pin_A..F: driver for amplifier path
-// type 0 = MCP4725 (index into DAC array), type 1 = PWM+RC (index into PWM_TACTILE_PINS)
-#define TACTILE_ROUTE_MCP4725 0
 #define TACTILE_ROUTE_PWM 1
 
 struct TactileRoute {
@@ -75,21 +73,29 @@ static const TactileRoute TACTILE_ROUTES[MAX_PINS] = {
 // (e.g. 5W DAEX19 ≈ 0.3) without changing the global feel.
 static const float TACTILE_MAX_LEVEL[MAX_PINS] = {1.0f, 1.0f, 1.0f, 1.0f, 0.3f, 0.3f};
 
-// --- Optional PCM5102 (feature disabled above; macros kept defined so i2s_audio.cpp
-//     still compiles. With ENABLE_I2S_PCM5102 0 the I2S driver is never started and
-//     these pins stay free.) ---
+// --- PCM5102 I2S (used when ACTIVE_OUTPUT_PATH == OUTPUT_PATH_PCM5102) ---
+// Macros stay defined so i2s_audio.cpp compiles; driver starts only if ENABLE_I2S_PCM5102.
+#if ACTIVE_BOARD == BOARD_ESP32_S3_DEVKITC_1
+#define I2S_BCK_PIN 2
+#define I2S_WS_PIN 17
+#define I2S_DOUT_PIN 18
+#elif ACTIVE_BOARD == BOARD_TTGO_T_DISPLAY
 #define I2S_BCK_PIN 2
 #define I2S_WS_PIN 17
 #define I2S_DOUT_PIN 22
+#else
+#error "Set ACTIVE_BOARD to BOARD_ESP32_S3_DEVKITC_1 or BOARD_TTGO_T_DISPLAY"
+#endif
+
 #define I2S_SAMPLE_RATE 44100
-#define I2S_CARRIER_HZ 400.0f
+// Shake carrier (Hz): OSC 0..1 is volume envelope over this tone (quake intensity).
+#define I2S_CARRIER_HZ 32.0f
 #define I2S_VOLUME_GAIN 1.0f
 #define I2S_AMP_SMOOTHING 0.04f
 #define I2S_DMA_BUF_COUNT 8
 #define I2S_DMA_BUF_LEN 256
-#define I2S_LEFT_PIN_INDEX 0
-#define I2S_RIGHT_PIN_INDEX 1
-#define I2S_DEFAULT_OUTPUT_MODE 0
+#define I2S_LEFT_PIN_INDEX 0   // Pin_A -> left
+#define I2S_RIGHT_PIN_INDEX 1  // Pin_B -> right
 
 // Serial / OSC
 #define SERIAL_BAUDRATE 115200
@@ -110,7 +116,7 @@ static const float TACTILE_MAX_LEVEL[MAX_PINS] = {1.0f, 1.0f, 1.0f, 1.0f, 0.3f, 
 #define OSC_PATH "/red_dust/osc_object_1"
 #define OSC_PORT 8000
 
-// --- Tactile feel (tune these) ---
+// --- Tactile feel (PWM path; tune these) ---
 // OSC/Serial 0..1 is the wave envelope (quake intensity over time). It amplitude-
 // modulates a sine; we do NOT time-smear that envelope (so onsets stay sharp).
 //
