@@ -5,3 +5,5 @@
 bool tactile_output_begin();
 void tactile_output_set_level(int pinIndex, float level01);
 void tactile_output_apply(bool active);
+void tactile_output_set_carrier_hz(float hz);
+float tactile_output_get_carrier_hz();

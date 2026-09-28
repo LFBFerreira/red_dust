@@ -39,11 +39,13 @@ static const uint8_t MCP4725_I2C_ADDR[MCP4725_COUNT] = {0x60};
 // --- PWM+RC outputs: one GPIO per channel (Pin_A .. Pin_F) ---
 // All pins must be PWM-capable, output-capable, and free on the selected board.
 #define PWM_TACTILE_COUNT 6
+
 #if ACTIVE_BOARD == BOARD_ESP32_S3_DEVKITC_1
 // Left-header cluster on DevKitC-1: adjacent, PWM-capable, avoids BOOT/USB/UART/strap/flash.
 // Avoid: 0 (BOOT), 19/20 (USB), 43/44 (UART0), 45/46 (strap),
 // 35–37 (octal flash on many WROOM-1 modules), 38/48 (onboard LEDs).
 static const int PWM_TACTILE_PINS[PWM_TACTILE_COUNT] = {4, 5, 6, 7, 15, 16};
+
 #elif ACTIVE_BOARD == BOARD_TTGO_T_DISPLAY
 static const int PWM_TACTILE_PINS[PWM_TACTILE_COUNT] = {25, 26, 27, 32, 33, 13};
 #else
@@ -69,10 +71,8 @@ static const TactileRoute TACTILE_ROUTES[MAX_PINS] = {
     {TACTILE_ROUTE_PWM, 5},  // Pin_F -> PWM_TACTILE_PINS[5] + RC
 };
 
-// Per-channel output ceiling (0..1) applied before PWM mapping. Use this to protect
-// lower-power exciters: e.g. DAEX19CT-4 (5W) vs DAEX25VT-4 (20W). Set the 5W channels
-// to a lower value so they never reach full drive. 1.0 = no limit.
-// Pin_A/B/C/D -> DAEX25VT-4 (20W): full range. Pin_E/F -> DAEX19CT-4 (5W): capped at 0.3.
+// Per-channel max drive (0..1). Scale a channel down for weaker exciters
+// (e.g. 5W DAEX19 ≈ 0.3) without changing the global feel.
 static const float TACTILE_MAX_LEVEL[MAX_PINS] = {1.0f, 1.0f, 1.0f, 1.0f, 0.3f, 0.3f};
 
 // --- Optional PCM5102 (feature disabled above; macros kept defined so i2s_audio.cpp
@@ -110,11 +110,25 @@ static const float TACTILE_MAX_LEVEL[MAX_PINS] = {1.0f, 1.0f, 1.0f, 1.0f, 0.3f, 
 #define OSC_PATH "/red_dust/osc_object_1"
 #define OSC_PORT 8000
 
-// PWM (tactile filtered outputs)
+// --- Tactile feel (tune these) ---
+// OSC/Serial 0..1 is the wave envelope (quake intensity over time). It amplitude-
+// modulates a sine; we do NOT time-smear that envelope (so onsets stay sharp).
+//
+// Shake carrier (Hz): haptic tone under the envelope. Lower = heavier feel.
+#define PWM_TACTILE_CARRIER_HZ 32.0f
+// How hard OSC=1.0 hits the shaker (0..1). THIS is the fidelity-vs-pop balance:
+// raise for stronger shake, lower if peaks still slap the coil. Try 0.75–0.95.
+#define PWM_TACTILE_DRIVE 0.88f
+
+// --- PWM hardware (leave alone unless changing the circuit) ---
 #define PWM_MIN 0
 #define PWM_MAX 255
-#define PWM_FREQUENCY 25000
+#define PWM_FREQUENCY 50000
 #define PWM_RESOLUTION 8
+#define PWM_TACTILE_UPDATE_HZ 5000
+// Tiny envelope smooth (ms): only kills packet/quantization clicks, not quake onsets.
+#define PWM_TACTILE_SMOOTH_MS 5
+// RC: ~1 kΩ + 100–220 nF (pass ~30 Hz, kill 50 kHz). Not 10 µF.
 
 #define GRAPH_GRID_COLOR 0x001F
 #define GRAPH_TRACE_COLOR 0xF800

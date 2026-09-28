@@ -128,8 +128,11 @@ bool processControlMessage(const String& message) {
 #if ENABLE_I2S_PCM5102
         i2s_audio_set_carrier_hz((float)hz);
         serialDebugPrintf("PCM5102 tone frequency set to %d Hz\n", hz);
-#else
-        serialDebugPrintln("PCM5102 disabled in settings.h");
+#endif
+#if ENABLE_TACTILE_OUTPUT
+        tactile_output_set_carrier_hz((float)hz);
+        serialDebugPrintf("PWM tactile carrier set to %.0f Hz\n",
+                          (double)tactile_output_get_carrier_hz());
 #endif
       }
     }
@@ -145,6 +148,26 @@ void updateTactileOutputs() {
     tactile_output_set_level(i, latestPinValues[i]);
   }
   tactile_output_apply(hasPWMData);
+#endif
+}
+
+void silenceOutputsOnStreamIdle() {
+  // Keep driving while either Serial (USB) or OSC is still streaming.
+  if (serialReceivingData || oscReceivingData) {
+    return;
+  }
+  if (!hasPWMData) {
+    return;
+  }
+  for (int i = 0; i < MAX_PINS; i++) {
+    latestPinValues[i] = 0.0f;
+    pwmValues[i] = 0;
+  }
+  latestValue = 0.0f;
+  hasPWMData = false;
+  updateTactileOutputs();
+#if ENABLE_I2S_PCM5102
+  i2s_audio_mute();
 #endif
 }
 
@@ -561,6 +584,7 @@ void updateGui() {
 }
 
 void updateVibrationMotor() {
+  silenceOutputsOnStreamIdle();
   updateTactileOutputs();
 #if ENABLE_I2S_PCM5102
   if (!hasPWMData) {
@@ -720,7 +744,8 @@ void setup() {
   serialDebugPrintln("Serial commands: MODE,TAC | MODE,AUD | FREQ,<Hz>");
 #endif
 #if ENABLE_PWM_OUTPUT
-  serialDebugPrintln("Motors: PWM GPIOs (see settings.h PWM_TACTILE_PINS)");
+  serialDebugPrintf("Tactile: PWM GPIOs + %.0f Hz carrier (see settings.h)\n",
+                    (double)PWM_TACTILE_CARRIER_HZ);
 #endif
   serialDebugPrintln("==========================================");
 
