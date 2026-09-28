@@ -55,7 +55,7 @@ static void tactileCarrierTick(void* /*arg*/) {
       s_smoothed[pin] += (target - s_smoothed[pin]) * smooth;
     }
 
-    if (route.type == TACTILE_ROUTE_PWM && route.index < PWM_TACTILE_COUNT) {
+    if (route.type == TACTILE_ROUTE_PWM && route.index < MAX_PINS) {
       int gpio = PWM_TACTILE_PINS[route.index];
       int duty = active ? modulatedDuty(s_smoothed[pin], wave) : 0;
       ledcWrite(gpio, duty);
@@ -66,7 +66,7 @@ static void tactileCarrierTick(void* /*arg*/) {
 
 bool tactile_output_begin() {
 #if ENABLE_TACTILE_OUTPUT
-  for (int i = 0; i < PWM_TACTILE_COUNT; i++) {
+  for (int i = 0; i < MAX_PINS; i++) {
     int pin = PWM_TACTILE_PINS[i];
     ledcAttach(pin, PWM_FREQUENCY, PWM_RESOLUTION);
     ledcWrite(pin, 0);

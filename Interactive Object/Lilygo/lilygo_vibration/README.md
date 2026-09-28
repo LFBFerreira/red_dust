@@ -111,14 +111,14 @@ This firmware receives **Pin_A … Pin_F** (normalized 0..1 levels) from **Red D
 
 ### Output path: PCM5102 (default)
 
-OSC/Serial **Pin_A / Pin_B** set **left / right volume** over a ~**32 Hz** shake carrier. Signal chain:
+OSC/Serial **Pin_A / Pin_B** set **left / right** shake: each 0..1 value drives **volume** and **carrier frequency** (default **25..50 Hz**). Signal chain:
 
 **ESP32 I2S → PCM5102 line out → HW-104 → shakers**
 
 | RDCC slot | Role |
 |-----------|------|
-| **Pin_A** | Left volume envelope |
-| **Pin_B** | Right volume envelope |
+| **Pin_A** | Left: volume + Hz (0→min, 1→max) |
+| **Pin_B** | Right: volume + Hz (0→min, 1→max) |
 | **Pin_C … Pin_F** | Parsed / graphed only — **not** driven on this path |
 
 | PCM5102 label | ESP32-S3-DevKitC-1 | TTGO T-Display |
@@ -127,7 +127,7 @@ OSC/Serial **Pin_A / Pin_B** set **left / right volume** over a ~**32 Hz** shake
 | LRCK (WS) | **17** | **17** |
 | DIN | **18** | **22** |
 
-Serial: `FREQ,<Hz>` retunes the shake carrier (whiteboard tuning).
+Tune range in `settings.h`: `I2S_CARRIER_HZ_MIN` / `I2S_CARRIER_HZ_MAX`. Exact OSC **0** mutes; any value above 0 is remapped into `[SHAKE_LEVEL_FLOOR, 1]` so weak signals still shake. Serial `FREQ,<Hz>` forces a fixed carrier (volume still from OSC).
 
 ### Output path: PWM+RC (alternate)
 
@@ -174,7 +174,7 @@ The `settings.h` file allows you to configure the most important settings for th
 - **Hardware Configuration:**
   - `MAX_PINS`: `6` (Pin_A .. Pin_F)
   - `PWM_TACTILE_PINS[]`, `TACTILE_ROUTES[]` (PWM path)
-  - `I2S_BCK_PIN` / `I2S_WS_PIN` / `I2S_DOUT_PIN`, `I2S_CARRIER_HZ` (PCM5102 path)
+  - `I2S_BCK_PIN` / `I2S_WS_PIN` / `I2S_DOUT_PIN`, `I2S_CARRIER_HZ_MIN` / `I2S_CARRIER_HZ_MAX` (PCM5102 path)
 
 - **PWM Settings:**
   - `PWM_MIN`: Minimum PWM value - motor off (default: 0)

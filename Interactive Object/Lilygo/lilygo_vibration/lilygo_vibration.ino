@@ -54,7 +54,6 @@ static String lastWifiStatusText = "";
 static String serialBuffer = "";
 static const int SERIAL_BUFFER_SIZE = 384;
 static const unsigned long SERIAL_TIMEOUT_MS = 1000;
-static const unsigned long SERIAL_RECEIVING_TIMEOUT = 500;
 static unsigned long lastSerialCharTime = 0;
 static bool serialConnected = false;
 static bool serialReceivingData = false;
@@ -63,7 +62,6 @@ static const int OSC_BUFFER_SIZE = 512;
 static uint8_t oscBuffer[OSC_BUFFER_SIZE];
 static bool oscReceivingData = false;
 static unsigned long lastOscTime = 0;
-static const unsigned long OSC_RECEIVING_TIMEOUT = 500;
 
 static bool hasLiveData = false;
 
@@ -76,6 +74,17 @@ enum DataSource { SOURCE_SERIAL, SOURCE_OSC };
 static int alignTo4Bytes(int offset) { return (offset + 3) & ~3; }
 
 static bool isStreamActive() { return serialReceivingData || oscReceivingData; }
+
+// Exact 0 stays off; (0,1] -> [SHAKE_LEVEL_FLOOR, 1] so small OSC still moves the shaker.
+static float scaleShakeLevel(float level01) {
+  if (!(level01 > 0.0f)) {
+    return 0.0f;
+  }
+  if (level01 >= 1.0f) {
+    return 1.0f;
+  }
+  return SHAKE_LEVEL_FLOOR + level01 * (1.0f - SHAKE_LEVEL_FLOOR);
+}
 
 static bool sanitizeLevel01(float* v) {
   if (v == nullptr || isnan(*v) || isinf(*v) || *v < 0.0f || *v > 1.0f) {
@@ -138,14 +147,14 @@ static void clearLivePinValues() {
 static void pushOutputs() {
 #if ENABLE_TACTILE_OUTPUT
   for (int i = 0; i < MAX_PINS; i++) {
-    tactile_output_set_level(i, latestPinValues[i]);
+    tactile_output_set_level(i, scaleShakeLevel(latestPinValues[i]));
   }
   tactile_output_apply(hasLiveData);
 #endif
 #if ENABLE_I2S_PCM5102
   if (hasLiveData) {
-    i2s_audio_set_stereo_levels(latestPinValues[I2S_LEFT_PIN_INDEX],
-                                latestPinValues[I2S_RIGHT_PIN_INDEX]);
+    i2s_audio_set_stereo_levels(scaleShakeLevel(latestPinValues[I2S_LEFT_PIN_INDEX]),
+                                scaleShakeLevel(latestPinValues[I2S_RIGHT_PIN_INDEX]));
   } else {
     i2s_audio_mute();
   }
@@ -177,7 +186,7 @@ static void restartGraphTraces() {
 static void setShakeCarrierHz(float hz) {
 #if ENABLE_I2S_PCM5102
   i2s_audio_set_carrier_hz(hz);
-  serialDebugPrintf("PCM5102 shake carrier set to %.0f Hz\n", (double)hz);
+  serialDebugPrintf("PCM5102 carrier fixed to %.0f Hz (OSC still scales volume)\n", (double)hz);
 #endif
 #if ENABLE_TACTILE_OUTPUT
   tactile_output_set_carrier_hz(hz);
@@ -341,7 +350,7 @@ static void processSerialMessages() {
     }
   }
 
-  if (serialReceivingData && (millis() - lastSerialCharTime) > SERIAL_RECEIVING_TIMEOUT) {
+  if (serialReceivingData && (millis() - lastSerialCharTime) > STREAM_IDLE_TIMEOUT_MS) {
     serialReceivingData = false;
   }
   if (serialBuffer.length() > 0 && (millis() - lastSerialCharTime) > SERIAL_TIMEOUT_MS) {
@@ -452,7 +461,7 @@ static void processOSCMessages() {
     }
   }
 
-  if (oscReceivingData && (millis() - lastOscTime) > OSC_RECEIVING_TIMEOUT) {
+  if (oscReceivingData && (millis() - lastOscTime) > STREAM_IDLE_TIMEOUT_MS) {
     oscReceivingData = false;
   }
 }
@@ -541,6 +550,13 @@ static uint8_t s_statusLedR = 255;
 static uint8_t s_statusLedG = 255;
 static uint8_t s_statusLedB = 255;
 
+// WiFi/RMT can blank the WS2812 without updating our cache; force the next write.
+static void statusRgbInvalidate() {
+  s_statusLedR = 255;
+  s_statusLedG = 255;
+  s_statusLedB = 255;
+}
+
 static void statusRgbWrite(uint8_t r, uint8_t g, uint8_t b) {
   if (r == s_statusLedR && g == s_statusLedG && b == s_statusLedB) {
     return;
@@ -561,12 +577,14 @@ static void statusRgbBootTest() {
   neopixelWrite(STATUS_RGB_LED_PIN, 0, 0, 255);
   delay(200);
   neopixelWrite(STATUS_RGB_LED_PIN, 0, 0, 0);
-  s_statusLedR = s_statusLedG = s_statusLedB = 0;
+  statusRgbInvalidate();
 }
+
+static void statusRgbShowIdle() { statusRgbWrite(255, 0, 0); }
 
 static void updateStatusRgbLed() {
   if (!isStreamActive()) {
-    statusRgbWrite(255, 0, 0);
+    statusRgbShowIdle();
     return;
   }
   uint8_t blue = (uint8_t)(constrain(latestPinValues[0], 0.0f, 1.0f) * 255.0f);
@@ -675,15 +693,16 @@ static void printBootBanner() {
   serialDebugPrintln("Serial: v1[,v2,...],timestamp  (last comma = timestamp; up to MAX_PINS values)");
   serialDebugPrintln("OSC: base path + typetag ,f...fs + floats BE + timestamp string");
 #if ENABLE_I2S_PCM5102
-  serialDebugPrintf("I2S -> PCM5102 shake: Pin_A=L Pin_B=R, carrier %.0f Hz (C–F unused)\n",
-                    (double)I2S_CARRIER_HZ);
+  serialDebugPrintf(
+      "I2S -> PCM5102 shake: Pin_A=L Pin_B=R, OSC 0..1 -> volume + %.0f..%.0f Hz (C–F unused)\n",
+      (double)I2S_CARRIER_HZ_MIN, (double)I2S_CARRIER_HZ_MAX);
 #endif
 #if ENABLE_TACTILE_OUTPUT
   serialDebugPrintf("Tactile: PWM GPIOs + %.0f Hz carrier (see settings.h)\n",
                     (double)PWM_TACTILE_CARRIER_HZ);
 #endif
 #if ENABLE_I2S_PCM5102 || ENABLE_TACTILE_OUTPUT
-  serialDebugPrintln("Serial command: FREQ,<Hz>");
+  serialDebugPrintln("Serial: FREQ,<Hz> forces fixed carrier (whiteboard)");
 #endif
   serialDebugPrintln("==========================================");
 }
@@ -699,7 +718,6 @@ void setup() {
 
 #if ENABLE_STATUS_RGB_LED
   statusRgbBootTest();
-  statusRgbWrite(255, 0, 0);
 #endif
 
   initializeDisplay();
@@ -710,6 +728,12 @@ void setup() {
   serialReceivingData = false;
   clearLivePinValues();
   initializeOutputs();
+
+  // WiFi/I2S init can blank the WS2812; set idle red after peripherals are up.
+#if ENABLE_STATUS_RGB_LED
+  statusRgbInvalidate();
+  statusRgbShowIdle();
+#endif
 }
 
 void loop() {

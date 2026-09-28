@@ -8,8 +8,10 @@ static volatile float s_targetL = 0.0f;
 static volatile float s_targetR = 0.0f;
 static float s_currentL = 0.0f;
 static float s_currentR = 0.0f;
-static float s_phase = 0.0f;
-static volatile float s_carrierHz = I2S_CARRIER_HZ;
+static float s_phaseL = 0.0f;
+static float s_phaseR = 0.0f;
+static volatile float s_hzMin = I2S_CARRIER_HZ_MIN;
+static volatile float s_hzMax = I2S_CARRIER_HZ_MAX;
 static bool s_ready = false;
 
 #ifndef PI_F
@@ -23,10 +25,27 @@ static float sanitizeLevel(float v) {
   return constrain(v, 0.0f, 1.0f);
 }
 
+static float levelToHz(float level01, float hzMin, float hzMax) {
+  return hzMin + sanitizeLevel(level01) * (hzMax - hzMin);
+}
+
+static void wrapPhase(float* phase) {
+  if (*phase >= 2.0f * PI_F) {
+    *phase -= 2.0f * PI_F;
+  }
+}
+
 void i2s_audio_set_carrier_hz(float hz) {
+  if (hz <= 0.0f) {
+    s_hzMin = I2S_CARRIER_HZ_MIN;
+    s_hzMax = I2S_CARRIER_HZ_MAX;
+    return;
+  }
   if (hz < 15.0f) hz = 15.0f;
   if (hz > 200.0f) hz = 200.0f;
-  s_carrierHz = hz;
+  // Fixed carrier for whiteboard tuning (OSC still scales volume only).
+  s_hzMin = hz;
+  s_hzMax = hz;
 }
 
 void i2s_audio_set_stereo_levels(float left, float right) {
@@ -50,24 +69,28 @@ static void audioStreamTask(void* /*param*/) {
   int16_t buffer[frameCount * 2];
   size_t bytesWritten = 0;
   const float smooth = I2S_AMP_SMOOTHING;
+  const float sampleRate = (float)I2S_SAMPLE_RATE;
 
   while (true) {
     s_currentL += (s_targetL - s_currentL) * smooth;
     s_currentR += (s_targetR - s_currentR) * smooth;
 
-    const float sampleRate = (float)I2S_SAMPLE_RATE;
-    const float carrier = s_carrierHz;
-    const float phaseStep = (2.0f * PI_F * carrier) / sampleRate;
+    const float hzMin = s_hzMin;
+    const float hzMax = s_hzMax;
 
     for (size_t i = 0; i < frameCount; i++) {
-      const float carrierSample = sinf(s_phase);
-      s_phase += phaseStep;
-      if (s_phase >= 2.0f * PI_F) {
-        s_phase -= 2.0f * PI_F;
-      }
+      const float hzL = levelToHz(s_currentL, hzMin, hzMax);
+      const float hzR = levelToHz(s_currentR, hzMin, hzMax);
 
-      int32_t left = (int32_t)(carrierSample * s_currentL * 32767.0f * I2S_VOLUME_GAIN);
-      int32_t right = (int32_t)(carrierSample * s_currentR * 32767.0f * I2S_VOLUME_GAIN);
+      s_phaseL += (2.0f * PI_F * hzL) / sampleRate;
+      s_phaseR += (2.0f * PI_F * hzR) / sampleRate;
+      wrapPhase(&s_phaseL);
+      wrapPhase(&s_phaseR);
+
+      int32_t left =
+          (int32_t)(sinf(s_phaseL) * s_currentL * 32767.0f * I2S_VOLUME_GAIN);
+      int32_t right =
+          (int32_t)(sinf(s_phaseR) * s_currentR * 32767.0f * I2S_VOLUME_GAIN);
       if (left > 32767) left = 32767;
       if (left < -32768) left = -32768;
       if (right > 32767) right = 32767;
@@ -122,8 +145,9 @@ bool i2s_audio_begin() {
   xTaskCreatePinnedToCore(audioStreamTask, "i2s_pcm", 4096, nullptr, 2, nullptr, 0);
 
   s_ready = true;
-  serialDebugPrintf("I2S -> PCM5102 shake: %u Hz sample, BCK=%d WS=%d DOUT=%d, carrier %.1f Hz\n",
-                    (unsigned)I2S_SAMPLE_RATE, I2S_BCK_PIN, I2S_WS_PIN, I2S_DOUT_PIN,
-                    (double)s_carrierHz);
+  serialDebugPrintf(
+      "I2S -> PCM5102 shake: %u Hz sample, BCK=%d WS=%d DOUT=%d, OSC 0..1 -> %.0f..%.0f Hz + volume\n",
+      (unsigned)I2S_SAMPLE_RATE, I2S_BCK_PIN, I2S_WS_PIN, I2S_DOUT_PIN, (double)s_hzMin,
+      (double)s_hzMax);
   return true;
 }
