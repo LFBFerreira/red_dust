@@ -1,0 +1,60 @@
+---
+description: How agents should plan, code, comment, and verify changes in red_dust
+alwaysApply: true
+---
+
+# Agent workflow
+
+## Challenge bad ideas
+
+- If the request is incorrect, risky, or a poor fit for this codebase, say so before coding.
+- Explain **why** (correctness, architecture, performance, maintainability, protocol contract).
+- Offer a **middle-ground alternative** when useful — something that meets the user's goal with fewer downsides.
+- Proceed with the original ask only if the user confirms after the pushback.
+
+## Clarify what they are asking
+
+- Restate the request in plain terms so the user can confirm the real goal.
+- When the ask describes a known programming concept (e.g. mixin, signal/slot, debounce, ABC, ring buffer), **name it** and briefly explain what it is.
+- Help the user learn: connect their feature wording to the concept, trade-offs, and when it fits this project — do not only implement silently.
+- Keep teaching short and practical; then proceed (or wait if clarification is needed).
+
+## Before changing code
+
+- Give a short summarized plan the user can follow while you work: goal, key files, and main steps.
+- State assumptions explicitly; if intent is unclear, ask instead of guessing.
+- Prefer small, verifiable steps over one large rewrite.
+
+## While implementing
+
+- Write the minimum code needed for the request — no speculative features, layers, or abstractions.
+- Match existing patterns, naming, and module boundaries:
+  - RDCC: `core/` (data, playback, OSC/serial), `ui/` (widgets, main window mixins), `settings.py` (defaults and wire contracts)
+  - Firmware: `Interactive Object/` sketches (`settings.h`, `input.*`, drivers); keep RDCC↔device protocol in sync
+- Prefer explicit checks and guard clauses over silent failure (missing stream, bad port, empty selection, inactive pins).
+- Prefer clear names over comments that restate the next line.
+
+## Comments (intention only)
+
+Comment **why / constraints / consequences**, not what the syntax does.
+
+```python
+# ❌ BAD — narrates the code
+# Increment count if below max
+if count < max_count:
+    count += 1
+
+# ✅ GOOD — intent and consequence
+# Cap pin slots so OSC/Serial frames stay aligned with firmware Pin_A…F
+if count < max_count:
+    count += 1
+```
+
+For deeper comment policy during cleanup passes, follow `code-cleanup.mdc`.
+
+## After changing code
+
+- Verify after substantive edits (see `build.mdc`): Python compile check for RDCC; firmware build only when that sketch was touched.
+- Fix errors before expanding scope.
+- Do not launch the GUI or flash hardware unless the user asks.
+- End with a short **summary of what changed** (behavior/outcome, not a file dump).

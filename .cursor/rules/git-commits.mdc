@@ -1,0 +1,54 @@
+---
+description: Commit message format — Conventional Commits title plus short bullet body
+alwaysApply: true
+---
+
+# Git commit messages
+
+When creating a git commit, write the message in this shape:
+
+```text
+type: short summary in imperative mood
+
+- Most important change
+- Next important change
+- Optional third change
+```
+
+## Title
+
+- Use [Conventional Commits](https://www.conventionalcommits.org/): `type: summary`
+- Common types: `feat`, `fix`, `refact`, `docs`, `chore`, `build`, `test`
+- Imperative mood ("disable X", not "disabled X" / "disables X")
+- ~72 characters or less; no trailing period
+- Focus on **why** / the outcome, not a file list
+
+## Body (bullet points)
+
+- Always add a blank line after the title
+- Use `-` bullets for the most important changes (usually 2–5)
+- Each bullet is one short, concrete change
+- Prefer user/dev-facing behavior over implementation trivia
+- Skip bullets only for trivial one-line commits where the title is enough
+
+## Examples
+
+```text
+fix: keep serial streaming when object tab loses focus
+
+- Stop closing the COM port on tab deactivate
+- Match baud to SERIAL_BAUDRATE so firmware stays in sync
+```
+
+```text
+feat: map six pin slots through OSC and serial frames
+
+- Align Pin_A…F order with firmware ingest
+- Send inactive slots as WIRE_INACTIVE_PIN_SENTINEL
+```
+
+## Do not
+
+- Do not write a long prose paragraph body
+- Do not dump every touched file as a bullet
+- Do not use vague bullets like "update code" or "fix stuff"
