@@ -1,0 +1,58 @@
+---
+description: How to run and verify red_dust (RDCC venv + Interactive Object firmware)
+alwaysApply: true
+---
+
+# Build and verify
+
+## Layout
+
+- Repo root contains `Red Dust Control Center/`, `Scripts/`, `Interactive Object/`.
+- App cwd for Python is **`Red Dust Control Center/`** (imports `core`, `ui`, `settings`).
+- Venv lives at `Red Dust Control Center/.venv` (created by setup scripts).
+
+## Red Dust Control Center (Python / PySide6)
+
+Prefer the project venv; do not install into system Python.
+
+```powershell
+# One-time / refresh deps (Windows)
+.\Scripts\Setup venv win.bat
+
+# Agent verify after substantive Python edits (no GUI)
+& "Red Dust Control Center\.venv\Scripts\python.exe" -m compileall -q "Red Dust Control Center"
+```
+
+Launch only when the user asks:
+
+```powershell
+.\Scripts\Launch RDCC win.cmd
+# or from app dir:
+& ".\.venv\Scripts\python.exe" main.py
+```
+
+Other platforms: `Scripts/Setup venv mac.command`, `Scripts/Launch RDCC mac.command`, `Scripts/setup-raspberrypi.sh`, `Scripts/launch-raspberrypi.sh`. Requirements files: `requirements_windows.txt`, `requirements_mac.txt`, `requirements_raspberrypi.txt`.
+
+**Do not** invent alternate run paths (different venv location, Debug wrappers, packaging) for routine checks.
+
+## Interactive Object (firmware)
+
+Two styles under `Interactive Object/`:
+
+| Path | Toolchain |
+|------|-----------|
+| `Lilygo/lilygo_shaker/` (and similar `.ino` sketches) | Arduino IDE / ESP32 core — open the `.ino`, edit `settings.h`, Verify/Upload |
+| `Test ESP_RGB/` (PlatformIO) | `pio run` from that folder when PlatformIO is available |
+
+Agents should **not** flash boards unless asked. Prefer reading `settings.h` / `platformio.ini` and matching RDCC wire contracts (`SERIAL_BAUDRATE`, pin slots, OSC path/port) over guessing hardware.
+
+When firmware and RDCC share a protocol change, update **both** sides and call that out in the summary.
+
+## Export / portable bundle
+
+Repo-only: `export.bat` or `Scripts/Export RDCC.ps1` → `export/red_dust.zip`. Do not run export unless the user asks.
+
+## After edits
+
+- Python: `compileall` (or a focused `python -c "import …"`) is enough unless the user wants a full app launch.
+- Firmware: compile/verify only for the sketch you changed; skip if the toolchain is unavailable — say so briefly.

@@ -1,0 +1,106 @@
+---
+description: How to clean up red_dust code — simplify, extract, intention comments; no behavior change
+alwaysApply: true
+---
+
+# Code cleanup
+
+Apply **only** when the user asks to clean up, simplify, refactor for clarity, or extract/reuse helpers. Do not run a cleanup pass during normal feature or bugfix work.
+
+## Scope (required)
+
+Do **not** clean the whole repo. Limit work to:
+
+1. **Uncommitted changes** — every file in `git status` (staged + unstaged + untracked that belong to the work), or
+2. If the working tree is clean — files touched by **`HEAD` only** (`git show --name-only --pretty="" HEAD`)
+
+Stay inside that set unless the user names extra paths. Prefer a few high-value edits over a broad rewrite.
+
+## Goals
+
+- Simplify structure **without changing logic or behavior** (behavior preservation beats purity)
+- Extract repeated logic; add **intention** comments (why / contract), not narrations of the next line
+- Match existing style (Python in RDCC; Arduino/C++ in `Interactive Object/`)
+
+## Principles
+
+- **KISS** — smallest clarifying change; no clever metaclass/macro tricks
+- **DRY** — extract when the same *intent* appears 2+ times, not merely similar-looking code
+- **YAGNI** — no new layers, protocols, or folders “for later”
+- **SRP / SLAP** — one job per function; one abstraction level (orchestration vs detail)
+- **SoC** — keep boundaries: `core/` owns data/playback/streaming, `ui/` displays and binds, `settings.py` holds defaults and wire contracts; firmware `settings.h` mirrors device-side knobs
+- **Command–query** — readers don’t mutate playback/stream state; draw/plot paths don’t start I/O
+- **Explicit over implicit** — named constants, guard clauses, clear Qt signal ownership
+
+### Extract when / don’t
+
+- **Do** if it removes real duplication or makes the parent readable at a glance
+- **Don’t** for one-off UI wiring, or if data flow (picker → model → playback → OSC/serial) gets harder to follow
+
+## Comments
+
+Prefer a better name over a comment. When commenting, explain **intention, constraints, and consequences** — never restate the code.
+
+### Modules / public APIs (Python)
+
+- Document public classes/functions with docstrings: **what** the API does, plus a short **why / when** if non-obvious
+- Call out contracts: units, pin order, inactive-pin sentinel, rates (Hz), ownership, side effects
+- Skip private helpers unless the signature alone is misleading
+
+```python
+# ❌ BAD — narrates the signature
+"""Sends OSC values to the object."""
+
+# ✅ GOOD — role + intention
+"""Send one frame of Pin_A…F floats plus timestamp string over OSC.
+Inactive slots use WIRE_INACTIVE_PIN_SENTINEL so firmware ignores them.
+"""
+```
+
+### Implementation (`.py` / firmware `.cpp` / `.ino`)
+
+- Comment **non-obvious why**: Qt quirks, serial port exclusivity, OSC typetags, smoothing/floor math, idle mute
+- Comment **invariants / assumptions** the next maintainer must not break (e.g. pin index 0 = Pin_A)
+- Cross-link policy (`settings.py` / `settings.h`) instead of duplicating long tables
+- Do **not** comment every step (“connect signal”, “loop i”, “write line”)
+
+```python
+# ❌ BAD
+# Close the serial port
+self._ser.close()
+
+# ✅ GOOD
+# Only one process can own the COM port; leave it free for RDCC streaming.
+self._ser.close()
+```
+
+### Also prefer
+
+- **Protocol notes** near wire encode/decode (frame shape, sentinel, baud, OSC path)
+- **Trap comments** where a wrong default looks fine until runtime (busy serial port, path/port mismatch)
+- **Delete or rewrite** comments that no longer match the code; stale “why” is worse than none
+- Keep comments sparse: a few high-value ones beat a wall of noise
+
+## Do
+
+- Keep helpers close to use (same module, or the owning package)
+- Names carry domain meaning (`pin_slots`, `inactive_sentinel`); lift magic numbers to `settings.py` / `settings.h` when they encode policy
+- Leave public APIs stable unless the user asked to reshape them
+- Run `compileall` (or firmware verify) after substantive cleanup — see `build.mdc`
+
+## Do not
+
+- Change playback math, stream rates, wire format, defaults, or GUI behavior “while you’re there”
+- Rename widely for taste, reshuffle unrelated files, or format the whole project
+- Delete debug hooks (widget debug borders, log panel) unless the user asks
+
+## Pass order
+
+1. Resolve scope via git (dirty files, else `HEAD` files); read only those
+2. Extract/reuse; simplify conditionals and naming locally
+3. Add/fix comments per **Comments**; remove stale narrations
+4. Confirm no intentional behavior change; verify if Python/firmware were touched
+
+## Commit
+
+When asked to commit cleanup: `refact:` per `git-commits.mdc`, bullets on structure (extract X, simplify Y), not a file list.
