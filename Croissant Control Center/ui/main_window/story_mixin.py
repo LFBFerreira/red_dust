@@ -25,6 +25,12 @@ class MainWindowStoryMixin(_MainWindowBase):
             timeline.clips_changed.connect(
                 lambda s=station: self._on_story_clips_changed(s)
             )
+            timeline.speed_edited.connect(
+                lambda speed, s=station: self._on_story_speed_edited(s, speed)
+            )
+            timeline.speed_edit_finished.connect(
+                lambda s=station: self._on_story_speed_edit_finished(s)
+            )
             clock = self.story_clocks[station]
             clock.time_changed.connect(lambda t, s=station: self._on_story_time_changed(s, t))
             clock.state_changed.connect(timeline.update_button_states)
@@ -42,22 +48,56 @@ class MainWindowStoryMixin(_MainWindowBase):
         )
 
     def _apply_story_speed(self, station: int, time_sec: float) -> None:
-        envelope = self.speed_envelopes[station]
-        if envelope.has_points():
-            speed = envelope.speed_at(time_sec)
-            can_drive = (
-                self.story_clocks[station].get_state() == "playing"
-                or not self._other_station_playing(station)
-            )
-            if can_drive and abs(speed - self.playback_controller.get_speed()) >= 0.05:
-                self.playback_controller.set_speed(speed, log=False)
-                spin = self.playback_controls.speed_spinbox
-                spin.blockSignals(True)
-                self.playback_controls.set_speed(speed)
-                spin.blockSignals(False)
+        panel = self.story_timelines[station]
+        # While the number box is focused, hold the typed speed. The envelope
+        # catch-up on edit-finished would otherwise fight each keystroke.
+        if panel.speed_input_active():
+            speed = panel.speed_input_value()
         else:
-            speed = self.playback_controller.get_speed()
-        self.story_timelines[station].update_speed_display(speed)
+            envelope = self.speed_envelopes[station]
+            if envelope.has_points():
+                speed = envelope.speed_at(time_sec)
+            else:
+                speed = self.playback_controller.get_speed()
+        can_drive = (
+            self.story_clocks[station].get_state() == "playing"
+            or not self._other_station_playing(station)
+        )
+        if (
+            (panel.speed_input_active() or self.speed_envelopes[station].has_points())
+            and can_drive
+            and abs(speed - self.playback_controller.get_speed()) >= 0.05
+        ):
+            self.playback_controller.set_speed(speed, log=False)
+            spin = self.playback_controls.speed_spinbox
+            spin.blockSignals(True)
+            self.playback_controls.set_speed(speed)
+            spin.blockSignals(False)
+        if not panel.speed_input_active():
+            panel.update_speed_display(speed)
+
+    def _on_story_speed_edited(self, station: int, speed: float) -> None:
+        panel = self.story_timelines[station]
+        point_id = self.speed_envelopes[station].set_speed_near(
+            self.story_clocks[station].get_current_sec(),
+            speed,
+            panel.speed_anchor_id(),
+        )
+        panel.set_speed_anchor_id(point_id)
+
+    def _on_story_speed_edit_finished(self, station: int) -> None:
+        panel = self.story_timelines[station]
+        anchor = panel.speed_anchor_id()
+        if anchor:
+            # Park the breakpoint where the playhead is now, so release doesn't snap.
+            self.speed_envelopes[station].set_speed_near(
+                self.story_clocks[station].get_current_sec(),
+                panel.speed_input_value(),
+                anchor,
+            )
+        # Enter leaves focus in the field; keep the same breakpoint for the next click.
+        if not panel.speed_input_active():
+            panel.set_speed_anchor_id(None)
 
     def _on_story_play(self, station: int) -> None:
         self._apply_story_speed(station, self.story_clocks[station].get_current_sec())

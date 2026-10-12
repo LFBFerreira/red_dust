@@ -7,7 +7,6 @@ import logging
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
-    QLabel,
     QMainWindow,
     QSizePolicy,
     QSplitter,
@@ -34,7 +33,7 @@ from settings import (
     STORY_PIN_COUNT,
     WIDGET_PANEL_MARGIN,
 )
-from ui.layout_helpers import wrap_panel
+from ui.layout_helpers import flush_vbox, panel_title, set_vertical_policy, wrap_panel
 from ui.view_prefs import (
     default_window_size,
     read_show_log,
@@ -185,18 +184,13 @@ class MainWindow(
 
         left_column = QWidget()
         left_column.setMinimumWidth(LEFT_PANEL_WIDTH)
-        left_column_layout = QVBoxLayout(left_column)
-        left_column_layout.setContentsMargins(0, 0, 0, 0)
-        left_column_layout.setSpacing(0)
+        left_column_layout = flush_vbox(left_column)
 
         self.metadata_widget = QWidget()
         metadata_layout = QVBoxLayout()
         metadata_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.dataset_label = QLabel(DATASET_LABEL_TITLE_HTML)
-        self.dataset_label.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
-        )
+        self.dataset_label = panel_title(DATASET_LABEL_TITLE_HTML)
         metadata_layout.addWidget(self.dataset_label)
 
         self.metadata_text = QTextEdit()
@@ -204,32 +198,22 @@ class MainWindow(
         self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
         metadata_layout.addWidget(self.metadata_text, 1)
         self.metadata_widget.setLayout(metadata_layout)
-        metadata_sp = self.metadata_widget.sizePolicy()
-        metadata_sp.setVerticalPolicy(QSizePolicy.Policy.Expanding)
-        self.metadata_widget.setSizePolicy(metadata_sp)
+        set_vertical_policy(self.metadata_widget, QSizePolicy.Policy.Expanding)
         left_column_layout.addWidget(wrap_panel(self.metadata_widget), 1)
 
         self.data_picker = DataPicker(data_manager=self.data_manager)
-        picker_sp = self.data_picker.sizePolicy()
-        picker_sp.setVerticalPolicy(QSizePolicy.Policy.Fixed)
-        self.data_picker.setSizePolicy(picker_sp)
+        set_vertical_policy(self.data_picker, QSizePolicy.Policy.Fixed)
         left_column_layout.addWidget(wrap_panel(self.data_picker), 0)
 
         waveform_column = QWidget()
-        waveform_column_layout = QVBoxLayout(waveform_column)
-        waveform_column_layout.setContentsMargins(0, 0, 0, 0)
-        waveform_column_layout.setSpacing(0)
+        waveform_column_layout = flush_vbox(waveform_column)
 
         self.waveform_viewer = WaveformViewer()
-        waveform_sp = self.waveform_viewer.sizePolicy()
-        waveform_sp.setVerticalPolicy(QSizePolicy.Policy.Expanding)
-        self.waveform_viewer.setSizePolicy(waveform_sp)
+        set_vertical_policy(self.waveform_viewer, QSizePolicy.Policy.Expanding)
         waveform_column_layout.addWidget(wrap_panel(self.waveform_viewer), 1)
 
         self.playback_controls = PlaybackControls()
-        playback_sp = self.playback_controls.sizePolicy()
-        playback_sp.setVerticalPolicy(QSizePolicy.Policy.Fixed)
-        self.playback_controls.setSizePolicy(playback_sp)
+        set_vertical_policy(self.playback_controls, QSizePolicy.Policy.Fixed)
         waveform_column_layout.addWidget(wrap_panel(self.playback_controls), 0)
 
         self._top_column_splitter.addWidget(left_column)
@@ -243,9 +227,8 @@ class MainWindow(
 
         self.story_timelines = []
         stations_host = QWidget()
-        stations_layout = QVBoxLayout(stations_host)
-        stations_layout.setContentsMargins(0, 0, 0, 0)
-        stations_layout.setSpacing(WIDGET_PANEL_MARGIN)
+        stations_layout = flush_vbox(stations_host)
+        # Each station is wrapped, so the gap between them is two panel margins.
         for station in range(STATION_COUNT):
             panel = StoryTimelinePanel(
                 self.pin_cues_list[station],
@@ -256,17 +239,15 @@ class MainWindow(
                 lane_color_offset=station * STORY_PIN_COUNT,
             )
             self.story_timelines.append(panel)
-            stations_layout.addWidget(panel, 1)
-        self._story_timeline_panel = wrap_panel(stations_host)
+            stations_layout.addWidget(wrap_panel(panel), 1)
+        self._story_timeline_panel = stations_host
         self._bottom_splitter.addWidget(self._story_timeline_panel)
 
         self.log_section = QWidget()
         log_layout = QVBoxLayout()
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_layout.setSpacing(WIDGET_PANEL_MARGIN // 2)
-        log_title = QLabel("<b>Log</b>")
-        log_title.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        log_layout.addWidget(log_title)
+        log_layout.addWidget(panel_title("<b>Log</b>"))
         self.log_viewer = LogViewer()
         log_layout.addWidget(self.log_viewer, 1)
         self.log_section.setLayout(log_layout)

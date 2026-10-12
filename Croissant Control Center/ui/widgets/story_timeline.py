@@ -18,6 +18,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -37,10 +38,12 @@ from settings import (
     STORY_SPEED_MAX,
     STORY_SPEED_MIN,
 )
+from ui.layout_helpers import panel_title
 from ui.widgets.channel_colors import CHANNEL_TRACE_COLORS
 
 LANE_H = 22
-RULER_H = 20
+# Tall enough for tick marks plus the time labels under them.
+RULER_H = 28
 LABEL_W = 54
 HANDLE_PX = 6
 DEFAULT_CLICK_CLIP_SEC = 10.0
@@ -98,7 +101,7 @@ class StoryTimelineCanvas(QWidget):
         self._create_start = 0.0
         self._create_end = 0.0
         self.setMinimumHeight(
-            RULER_H + max(1, cues.pin_count) * LANE_H + SPEED_LANE_H + 4
+            max(1, cues.pin_count) * LANE_H + SPEED_LANE_H + RULER_H
         )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -160,18 +163,8 @@ class StoryTimelineCanvas(QWidget):
         painter.setPen(QPen(grid, 1))
         painter.drawLine(LABEL_W, 0, LABEL_W, self.height())
 
-        painter.setFont(QFont(self.font().family(), 9))
-        painter.setPen(muted)
-        for mark_sec, major in self._ruler_marks(duration):
-            x = self._sec_to_x(mark_sec, track, duration)
-            painter.setPen(QPen(grid if not major else QColor(text_color.red(), text_color.green(), text_color.blue(), 70), 1))
-            painter.drawLine(int(x), RULER_H, int(x), self.height())
-            if major:
-                painter.setPen(muted)
-                painter.drawText(int(x) + 3, 13, format_story_time(mark_sec))
-
         for pin in range(self._cues.pin_count):
-            y = RULER_H + pin * LANE_H
+            y = pin * LANE_H
             lane_bg = pal.color(QPalette.ColorRole.AlternateBase) if pin % 2 else pal.color(QPalette.ColorRole.Base)
             painter.fillRect(QRectF(LABEL_W, y, track.width(), LANE_H), lane_bg)
             color = self._lane_color(pin)
@@ -209,6 +202,7 @@ class StoryTimelineCanvas(QWidget):
             painter.drawRoundedRect(rect, 3, 3)
 
         self._paint_speed_lane(painter, track, duration, pal, muted, grid)
+        self._paint_ruler(painter, track, duration, muted, grid, text_color)
 
         play_x = self._sec_to_x(self._clock.get_current_sec(), track, duration)
         painter.setPen(QPen(QColor("#e11d48"), 2))
@@ -278,6 +272,34 @@ class StoryTimelineCanvas(QWidget):
             painter.setPen(QPen(color, 1, Qt.PenStyle.DashLine))
             painter.drawLine(int(lane.left()), int(y), int(lane.right()), int(y))
 
+    def _paint_ruler(
+        self,
+        painter: QPainter,
+        track: QRectF,
+        duration: float,
+        muted: QColor,
+        grid: QColor,
+        text_color: QColor,
+    ) -> None:
+        """Time axis under the pin lanes and speed graph, so labels don't cover the clips."""
+        top = self._ruler_top()
+        painter.setPen(QPen(grid, 1))
+        painter.drawLine(LABEL_W, top, self.width(), top)
+        painter.setFont(QFont(self.font().family(), 9))
+        for mark_sec, major in self._ruler_marks(duration):
+            x = int(self._sec_to_x(mark_sec, track, duration))
+            tick_len = 8 if major else 4
+            painter.setPen(
+                QPen(
+                    grid if not major else QColor(text_color.red(), text_color.green(), text_color.blue(), 70),
+                    1,
+                )
+            )
+            painter.drawLine(x, top, x, top + tick_len)
+            if major:
+                painter.setPen(muted)
+                painter.drawText(x + 2, top + tick_len + 12, format_story_time(mark_sec))
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
             return
@@ -285,7 +307,7 @@ class StoryTimelineCanvas(QWidget):
         x, y = event.position().x(), event.position().y()
         if x < LABEL_W:
             return
-        if y < RULER_H:
+        if self._y_on_ruler(y):
             self.seek_requested.emit(self._x_to_sec(x))
             self._drag_mode = "seek"
             return
@@ -390,7 +412,7 @@ class StoryTimelineCanvas(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         x, y = event.position().x(), event.position().y()
-        if x < LABEL_W or y < RULER_H:
+        if x < LABEL_W or self._y_on_ruler(y):
             return
         hit = self._hit_speed_point(x, y)
         if hit is not None:
@@ -410,12 +432,23 @@ class StoryTimelineCanvas(QWidget):
         self.clips_edited.emit()
         self.update()
 
+    def _plot_width(self) -> float:
+        return max(1.0, self.width() - LABEL_W - 4)
+
+    def _ruler_top(self) -> int:
+        return max(0, self.height() - RULER_H)
+
+    def _y_on_ruler(self, y: float) -> bool:
+        return y >= self._ruler_top()
+
     def _track_rect(self) -> QRectF:
-        return QRectF(LABEL_W, RULER_H, max(1.0, self.width() - LABEL_W - 4), self._cues.pin_count * LANE_H)
+        return QRectF(LABEL_W, 0, self._plot_width(), self._cues.pin_count * LANE_H)
 
     def _speed_lane_rect(self) -> QRectF:
-        y = RULER_H + self._cues.pin_count * LANE_H
-        return QRectF(LABEL_W, y, max(1.0, self.width() - LABEL_W - 4), SPEED_LANE_H)
+        y = self._cues.pin_count * LANE_H
+        # Leftover panel height belongs to the speed graph; the time axis stays under it.
+        height = max(float(SPEED_LANE_H), self._ruler_top() - y)
+        return QRectF(LABEL_W, y, self._plot_width(), height)
 
     def _speed_to_y(self, speed: float, lane: QRectF) -> float:
         lo, hi = STORY_SPEED_MIN, STORY_SPEED_MAX
@@ -456,9 +489,9 @@ class StoryTimelineCanvas(QWidget):
         return max(0.0, min(duration, ratio * duration))
 
     def _pin_at_y(self, y: float) -> Optional[int]:
-        if y < RULER_H:
+        if y < 0 or self._y_on_ruler(y):
             return None
-        pin = int((y - RULER_H) / LANE_H)
+        pin = int(y / LANE_H)
         if 0 <= pin < self._cues.pin_count:
             return pin
         return None
@@ -466,7 +499,7 @@ class StoryTimelineCanvas(QWidget):
     def _clip_rect(self, clip: PinClip, track: QRectF, duration: float) -> QRectF:
         x0 = self._sec_to_x(clip.start_sec, track, duration)
         x1 = self._sec_to_x(clip.end_sec, track, duration)
-        y = RULER_H + clip.pin_index * LANE_H + 3
+        y = clip.pin_index * LANE_H + 3
         return QRectF(x0, y, max(4.0, x1 - x0), LANE_H - 6)
 
     def _hit_clip(self, x: float, pin: int) -> Optional[Tuple[PinClip, str]]:
@@ -506,6 +539,22 @@ class StoryTimelineCanvas(QWidget):
         return marks
 
 
+def _add_expanding_button(
+    layout: QHBoxLayout,
+    text: str,
+    on_click,
+    tooltip: str | None = None,
+) -> QPushButton:
+    """Toolbar button that absorbs spare width. Labels beside it stay at their size hint."""
+    button = QPushButton(text)
+    button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    if tooltip:
+        button.setToolTip(tooltip)
+    button.clicked.connect(on_click)
+    layout.addWidget(button, 1)
+    return button
+
+
 class StoryTimelinePanel(QWidget):
     """Toolbar + two-lane editor and speed envelope for one Croissant station."""
 
@@ -516,6 +565,8 @@ class StoryTimelinePanel(QWidget):
     duration_changed = Signal(float)
     clips_changed = Signal()
     sync_dy_toggled = Signal(bool)
+    speed_edited = Signal(float)
+    speed_edit_finished = Signal()
 
     def __init__(
         self,
@@ -536,7 +587,11 @@ class StoryTimelinePanel(QWidget):
         self._pin_labels = pin_labels
         self._lane_color_offset = lane_color_offset
         self._duration_updating = False
+        self._speed_updating = False
+        self._speed_anchor_id: Optional[str] = None
         self.setMinimumHeight(240)
+        # Fills the station cell; wrap_panel only adds the outer margin.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self._setup_ui()
         self._sync_duration_edit()
         self.update_time_display(clock.get_current_sec())
@@ -548,35 +603,36 @@ class StoryTimelinePanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        header = QHBoxLayout()
-        title = QLabel(f"<b>{self._title}</b>")
-        header.addWidget(title)
+        layout.addWidget(panel_title(f"<b>{self._title}</b>"))
+
         hint = QLabel(
             "A clip turns that pin on. Orange Speed lane: click to add points, drag a polyline. "
             "Empty speed lane uses the waveform Speed box. This board's Play does not start the other."
         )
-        hint.setWordWrap(False)
-        header.addWidget(hint, 1)
-        layout.addLayout(header)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
         controls = QHBoxLayout()
-        self.play_button = QPushButton("Play")
-        self.play_button.clicked.connect(self.play_clicked.emit)
-        controls.addWidget(self.play_button)
-        self.pause_button = QPushButton("Pause")
-        self.pause_button.clicked.connect(self.pause_clicked.emit)
-        controls.addWidget(self.pause_button)
-        self.stop_button = QPushButton("Stop")
-        self.stop_button.clicked.connect(self.stop_clicked.emit)
-        controls.addWidget(self.stop_button)
+        self.play_button = _add_expanding_button(controls, "Play", self.play_clicked.emit)
+        self.pause_button = _add_expanding_button(controls, "Pause", self.pause_clicked.emit)
+        self.stop_button = _add_expanding_button(controls, "Stop", self.stop_clicked.emit)
 
         self.time_label = QLabel("0:00 / 14:30")
         self.time_label.setMinimumWidth(90)
         controls.addWidget(self.time_label)
-        self.speed_label = QLabel("1.0x")
-        self.speed_label.setMinimumWidth(48)
-        self.speed_label.setToolTip("Waveform playback speed at this station's playhead")
-        controls.addWidget(self.speed_label)
+        self.speed_spin = QDoubleSpinBox()
+        self.speed_spin.setRange(STORY_SPEED_MIN, STORY_SPEED_MAX)
+        self.speed_spin.setDecimals(0)
+        self.speed_spin.setSingleStep(2)
+        self.speed_spin.setSuffix("x")
+        self.speed_spin.setKeyboardTracking(True)
+        self.speed_spin.setMinimumWidth(88)
+        self.speed_spin.setToolTip(
+            "Playback speed at this playhead. Applied as you type or click the arrows."
+        )
+        self.speed_spin.valueChanged.connect(self._on_speed_spin_changed)
+        self.speed_spin.editingFinished.connect(self.speed_edit_finished.emit)
+        controls.addWidget(self.speed_spin)
 
         controls.addWidget(QLabel("Duration:"))
         self.duration_edit = QTimeEdit()
@@ -594,16 +650,15 @@ class StoryTimelinePanel(QWidget):
         self.sync_dy_checkbox.toggled.connect(self.sync_dy_toggled.emit)
         controls.addWidget(self.sync_dy_checkbox)
 
-        self.clear_button = QPushButton("Clear clips")
-        self.clear_button.clicked.connect(self._on_clear_clips)
-        controls.addWidget(self.clear_button)
-        self.clear_speed_button = QPushButton("Clear speed")
-        self.clear_speed_button.setToolTip(
-            "Remove this station's speed breakpoints; waveform Speed box takes over"
+        self.clear_button = _add_expanding_button(
+            controls, "Clear clips", self._on_clear_clips
         )
-        self.clear_speed_button.clicked.connect(self._on_clear_speed)
-        controls.addWidget(self.clear_speed_button)
-        controls.addStretch()
+        self.clear_speed_button = _add_expanding_button(
+            controls,
+            "Clear speed",
+            self._on_clear_speed,
+            "Remove this station's speed breakpoints; waveform Speed box takes over",
+        )
         layout.addLayout(controls)
 
         self.canvas = StoryTimelineCanvas(
@@ -646,8 +701,32 @@ class StoryTimelinePanel(QWidget):
         sec = max(1.0, qtime_to_seconds(value))
         self.duration_changed.emit(sec)
 
+    def speed_input_active(self) -> bool:
+        return self.speed_spin.hasFocus()
+
+    def speed_input_value(self) -> float:
+        return float(self.speed_spin.value())
+
+    def speed_anchor_id(self) -> Optional[str]:
+        return self._speed_anchor_id
+
+    def set_speed_anchor_id(self, point_id: Optional[str]) -> None:
+        self._speed_anchor_id = point_id
+
+    def _on_speed_spin_changed(self, value: float) -> None:
+        if self._speed_updating:
+            return
+        self.speed_edited.emit(float(value))
+
     def update_speed_display(self, speed: float) -> None:
-        self.speed_label.setText(f"{speed:.1f}x")
+        # Leave the field alone while it is being edited, or the playhead tick
+        # overwrites the digits before Enter.
+        if self.speed_spin.hasFocus():
+            self.canvas.update()
+            return
+        self._speed_updating = True
+        self.speed_spin.setValue(round(float(speed)))
+        self._speed_updating = False
         self.canvas.update()
 
     def _on_clear_clips(self) -> None:
@@ -657,6 +736,7 @@ class StoryTimelinePanel(QWidget):
         self.canvas.update()
 
     def _on_clear_speed(self) -> None:
+        self._speed_anchor_id = None
         self._envelope.clear()
         self.clips_changed.emit()
         self.update_speed_display(STORY_SPEED_DEFAULT)

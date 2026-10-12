@@ -120,6 +120,32 @@ class SpeedEnvelope(QObject):
         self.changed.emit()
         return True
 
+    def set_speed_near(
+        self, time_sec: float, speed: float, point_id: Optional[str] = None
+    ) -> str:
+        """Set playback speed at ``time_sec`` using one breakpoint.
+
+        Reuses ``point_id`` when the user is still editing, so a spin box
+        drag does not leave a trail of points. A single point holds that
+        speed for the whole story.
+        """
+        t = max(0.0, min(float(time_sec), self._duration_sec))
+        speed = clamp_speed(round(float(speed), 1))
+        if point_id and self.point_by_id(point_id) is not None:
+            self.update_point(point_id, t, speed)
+            return point_id
+        nearest: Optional[SpeedPoint] = None
+        nearest_dt = 0.35
+        for point in self._points:
+            dt = abs(point.time_sec - t)
+            if dt <= nearest_dt:
+                nearest = point
+                nearest_dt = dt
+        if nearest is not None:
+            self.update_point(nearest.point_id, nearest.time_sec, speed)
+            return nearest.point_id
+        return self.add_point(t, speed).point_id
+
     def clear(self) -> None:
         if not self._points:
             return
