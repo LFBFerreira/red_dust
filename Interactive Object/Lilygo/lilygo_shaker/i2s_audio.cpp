@@ -53,12 +53,6 @@ void i2s_audio_set_stereo_levels(float left, float right) {
   s_targetR = sanitizeLevel(right);
 }
 
-void i2s_audio_set_target_amplitude(float amplitude) {
-  amplitude = sanitizeLevel(amplitude);
-  s_targetL = amplitude;
-  s_targetR = amplitude;
-}
-
 void i2s_audio_mute() {
   s_targetL = 0.0f;
   s_targetR = 0.0f;
