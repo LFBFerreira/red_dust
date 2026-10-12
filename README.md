@@ -1,101 +1,176 @@
-# Red Dust Control Center
+# Red Dust
 
-Desktop application for the **Becoming Red Dust** installation. Loads real seismic data from NASA's InSight SEIS archive, visualizes multi-channel waveforms, and streams normalized values over OSC and serial to interactive objects (sound, light, vibration).
+Software for the **Becoming Red Dust** installation.
 
-## Features
+**Red Dust Control Center (RDCC)** is a desktop app that loads real Mars seismic data from NASA’s InSight SEIS archive, shows multi-channel waveforms, and streams normalized levels over **USB Serial** and/or **OSC** to physical **interactive objects** (shakers, lights, and similar hardware).
 
-- Fetch and cache waveform data from the PDS InSight SEIS archive
-- Multi-channel waveform viewer with time-based playback, speed control, and looping
-- OSC and serial output at 60 Hz to multiple configurable objects
-- Per-object scaling, pin mapping, and session save/load
+You do **not** need to understand every folder to get started. Most people only need the desktop app first; firmware is a separate step when you have a board.
 
-## Requirements
+---
 
-- Python 3.8 or higher
-- Platform-specific dependencies in `Red Dust Control Center/requirements_*.txt`
+## What’s in this repo
 
-## Installation
+| Folder | What it is |
+|--------|------------|
+| `Red Dust Control Center/` | The desktop app (Python) |
+| `Scripts/` | Double-click / run scripts to set up and start the app |
+| `Interactive Object/` | Firmware for physical devices (Arduino / PlatformIO) |
 
-Scripts live in `Scripts/`. Each platform has a one-time **setup** script (creates `Red Dust Control Center/.venv`) and a **launch** script.
+Deeper notes for the app itself: [Red Dust Control Center/README.md](Red%20Dust%20Control%20Center/README.md)
 
-### Windows
+---
 
-1. Install [Python 3](https://www.python.org/downloads/) and ensure it is on PATH.
-2. Double-click or run:
-   - `Scripts\Setup venv win.bat` — first time only
-   - `Scripts\Launch RDCC win.cmd` — start the app
+## Quick start — desktop app (RDCC)
+
+### What you need
+
+1. A computer with **Windows**, **macOS**, or a **Raspberry Pi** (64-bit).
+2. **Python 3.8 or newer** installed.
+   - Windows: download from [python.org](https://www.python.org/downloads/) and, during setup, tick **“Add python.exe to PATH”**.
+   - macOS: python.org installer, or Xcode Command Line Tools.
+3. An internet connection the first time you download seismic data (later runs can use the local cache).
+
+You do **not** need to install Python packages by hand. The setup script creates a private environment (`.venv`) inside `Red Dust Control Center/`.
+
+### Windows (typical)
+
+1. Open the `Scripts` folder in File Explorer.
+2. **First time only:** double-click `Setup venv win.bat` and wait until it finishes (it may ask you to press a key at the end).
+3. Double-click `Launch RDCC win.cmd` to start the app. A console window stays open for logs; that is normal.
+
+If setup says Python was not found, install Python (with PATH enabled), close and reopen the scripts folder, and run setup again.
 
 ### macOS
 
-1. Install Python 3 (Xcode CLI tools or python.org).
-2. In Terminal, or double-click the `.command` files in Finder:
+1. In Terminal, once, make the scripts executable:
    ```bash
    chmod +x Scripts/*.command
-   open "Scripts/Setup venv mac.command"    # first time only
-   open "Scripts/Launch RDCC mac.command"   # start the app
    ```
+2. **First time only:** double-click `Scripts/Setup venv mac.command` (or open it from Terminal).
+3. Double-click `Scripts/Launch RDCC mac.command` to start the app.
 
-### Raspberry Pi (aarch64)
+### Raspberry Pi
 
-1. Copy the portable bundle to the Pi (see [Portable bundle](#portable-bundle) below).
-2. From the extracted folder:
-   ```bash
-   cd Scripts
-   chmod +x setup-raspberrypi.sh launch-raspberrypi.sh
-   ./setup-raspberrypi.sh
-   ```
-3. Launch:
-   - `./launch-raspberrypi.sh`, or
-   - **Red Dust Control Center** in the application menu (XFCE / Raspberry Pi OS), or
-   - Desktop shortcut `red-dust-control-center.desktop` if your desktop shows icons.
+Prefer the **portable zip** on the Pi (see [Portable bundle](#portable-bundle--copy-to-another-machine) below), then:
 
-**Pi system packages** (if setup or the GUI fails):
+```bash
+cd Scripts
+chmod +x setup-raspberrypi.sh launch-raspberrypi.sh
+./setup-raspberrypi.sh    # first time only
+./launch-raspberrypi.sh
+```
+
+You can also use the **Red Dust Control Center** entry in the application menu after setup, if it appears.
+
+If the GUI fails to start, install system packages:
 
 ```bash
 sudo apt install python3-venv python3-pip
 sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libegl1 libgl1 libglib2.0-0
 ```
 
-Use `export.bat` to build the zip — shell scripts are exported with Unix (LF) line endings. If you copy individual `.sh` files from Windows by hand and see `$'\r'` errors, run `sed -i 's/\r$//' *.sh` once in `Scripts/`.
+### After the app opens — a simple first run
 
-## Portable bundle
+1. Pick a station / date in the data picker and load waveforms (they cache under `Red Dust Control Center/cache/`).
+2. Select channels and press play to scrub the data in the waveform viewer.
+3. When you have hardware ready, add an **OSC** or **Serial** object, map channels to **Pin_A … Pin_F**, enable streaming, and play again.
 
-To copy the project to another machine without git, `.venv`, or cached data:
+Sessions can be saved under `Red Dust Control Center/sessions/` so you can reopen a setup later.
 
-```powershell
-.\export.bat
-```
+---
 
-This writes `export/red_dust.zip` (~0.1 MB). Extract on the target machine; the zip contents sit at the top level (`Scripts/`, `Red Dust Control Center/`, etc.). See `README-install.txt` in the bundle for a quick reference.
+## Interactive objects (hardware)
 
-## Scripts reference
+The desktop app talks to boards that run firmware under `Interactive Object/`. Start the app first; then flash a device when you are ready.
 
-| Platform | Setup | Launch |
-|----------|-------|--------|
+| Project | Role | Setup guide |
+|---------|------|-------------|
+| `Interactive Object/Lilygo/lilygo_shaker/` | Main tactile / shaker firmware (Serial + OSC, Pin_A…F) | [lilygo_shaker README](Interactive%20Object/Lilygo/lilygo_shaker/README.md) |
+| `Interactive Object/Test ESP_RGB/` | Test RGB LED object (PlatformIO or Arduino) | [Test ESP_RGB README](Interactive%20Object/Test%20ESP_RGB/README.md) |
+| `Interactive Object/Test Vibration Motor/` | Small vibration-motor test sketch | Open the `.ino` in that folder |
+
+**Typical flow with a shaker board**
+
+1. Follow the [lilygo_shaker README](Interactive%20Object/Lilygo/lilygo_shaker/README.md): install Arduino + ESP32 support, set board options in `settings.h`, upload.
+2. In RDCC, create a **Serial** object (COM port, baud **115200**) and/or an **OSC** object (board IP, port/path from `settings.h`).
+3. Map waveform channels to pins, enable streaming, start playback.
+4. Close the Arduino Serial Monitor while RDCC uses the USB port — only one program can own it.
+
+Wire format, WiFi (`Red_Dust_Object` AP), and troubleshooting live in the firmware README above — use that page as the source of truth for the device side.
+
+---
+
+## Scripts cheat sheet
+
+| Platform | First-time setup | Start the app |
+|----------|------------------|---------------|
 | Windows | `Scripts/Setup venv win.bat` | `Scripts/Launch RDCC win.cmd` |
 | macOS | `Scripts/Setup venv mac.command` | `Scripts/Launch RDCC mac.command` |
 | Raspberry Pi | `Scripts/setup-raspberrypi.sh` | `Scripts/launch-raspberrypi.sh` |
 
-Export (repo only): `export.bat` or `Scripts/Export RDCC.ps1`
+Export a clean copy for another machine (from the repo on Windows): `export.bat` or `Scripts/Export RDCC.ps1`
+
+---
 
 ## Project layout
 
 ```
 red_dust/
-  Red Dust Control Center/   Application source
-    core/                    Data, playback, OSC/serial
-    ui/                      Desktop UI
-    cache/                   Downloaded seismic data (created at runtime)
-    sessions/                Saved sessions (created at runtime)
-  Scripts/                   Setup, launch, and export scripts
-  Interactive Object/        Firmware for physical objects (separate)
+  README.md                      ← you are here
+  Red Dust Control Center/       Desktop app
+    main.py                      App entry point
+    settings.py                  Defaults (ports, baud, pin slots, UI)
+    core/                        Data, playback, OSC / serial
+    ui/                          Windows and widgets
+    cache/                       Downloaded seismic data (created at runtime)
+    sessions/                    Saved sessions (created at runtime)
+    .venv/                       Private Python env (created by setup scripts)
+  Scripts/                       Setup, launch, export
+  Interactive Object/            Device firmware (separate from the desktop app)
+    Lilygo/lilygo_shaker/        Shaker / tactile object
+    Test ESP_RGB/                RGB LED test object
+    Test Vibration Motor/        Simple motor test
 ```
 
-More detail on waveform units and data sources: `Red Dust Control Center/README.md`
+---
+
+## Where to read next
+
+| If you want to… | Open |
+|-----------------|------|
+| Understand app folders / data cache | [Red Dust Control Center/README.md](Red%20Dust%20Control%20Center/README.md) |
+| Flash and wire the shaker board | [Interactive Object/Lilygo/lilygo_shaker/README.md](Interactive%20Object/Lilygo/lilygo_shaker/README.md) |
+| Build the RGB LED test object | [Interactive Object/Test ESP_RGB/README.md](Interactive%20Object/Test%20ESP_RGB/README.md) |
+| Browse raw InSight SEIS files | [NASA PDS InSight SEIS archive](https://pds-geosciences.wustl.edu/insight/urn-nasa-pds-insight_seis/data/) |
+
+---
+
+## Portable bundle — copy to another machine
+
+To ship the project **without** git history, `.venv`, or cached waveforms:
+
+```powershell
+.\export.bat
+```
+
+This writes `export/red_dust.zip`. Extract it on the other computer, then run that platform’s **setup** script once and **launch** as above.
+
+If you copy `.sh` scripts from Windows by hand and see `$'\r'` errors on the Pi, fix line endings once in `Scripts/`:
+
+```bash
+sed -i 's/\r$//' *.sh
+```
+
+(Using `export.bat` avoids that for the zip.)
+
+---
 
 ## Data sources
 
-NASA PDS InSight SEIS archive: https://pds-geosciences.wustl.edu/insight/urn-nasa-pds-insight_seis/data/
+NASA PDS InSight SEIS archive:  
+https://pds-geosciences.wustl.edu/insight/urn-nasa-pds-insight_seis/data/
+
+---
 
 ## License
 
