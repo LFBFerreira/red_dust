@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional, Sequence, Tuple
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTime, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTime, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -47,7 +47,10 @@ RULER_H = 28
 LABEL_W = 54
 HANDLE_PX = 6
 DEFAULT_CLICK_CLIP_SEC = 10.0
+# Comfortable speed-graph height. Extra panel space still goes to this lane;
+# the splitter may shrink it down to SPEED_LANE_MIN_H.
 SPEED_LANE_H = 72
+SPEED_LANE_MIN_H = 24
 SPEED_POINT_R = 5
 SPEED_HIT_PX = 8
 
@@ -100,12 +103,22 @@ class StoryTimelineCanvas(QWidget):
         self._create_pin: Optional[int] = None
         self._create_start = 0.0
         self._create_end = 0.0
+        # Floor is the pin lanes, a thin speed strip, and the ruler. Reserving
+        # the full speed lane pinned the splitter above the stations.
         self.setMinimumHeight(
-            max(1, cues.pin_count) * LANE_H + SPEED_LANE_H + RULER_H
+            max(1, cues.pin_count) * LANE_H + SPEED_LANE_MIN_H + RULER_H
         )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
+
+    def sizeHint(self) -> QSize:
+        """Preferred graph height. The splitter may shrink down to the minimum."""
+        width = super().sizeHint().width()
+        return QSize(
+            width if width > 0 else 0,
+            max(1, self._cues.pin_count) * LANE_H + SPEED_LANE_H + RULER_H,
+        )
 
     def _lane_color(self, pin_index: int) -> QColor:
         idx = (self._lane_color_offset + pin_index) % len(CHANNEL_TRACE_COLORS)
@@ -446,8 +459,9 @@ class StoryTimelineCanvas(QWidget):
 
     def _speed_lane_rect(self) -> QRectF:
         y = self._cues.pin_count * LANE_H
-        # Leftover panel height belongs to the speed graph; the time axis stays under it.
-        height = max(float(SPEED_LANE_H), self._ruler_top() - y)
+        # Leftover height belongs to the speed graph. Forcing SPEED_LANE_H here
+        # draws that lane over the ruler once the splitter shrinks the panel.
+        height = max(0.0, float(self._ruler_top() - y))
         return QRectF(LABEL_W, y, self._plot_width(), height)
 
     def _speed_to_y(self, speed: float, lane: QRectF) -> float:
@@ -589,8 +603,8 @@ class StoryTimelinePanel(QWidget):
         self._duration_updating = False
         self._speed_updating = False
         self._speed_anchor_id: Optional[str] = None
-        self.setMinimumHeight(240)
         # Fills the station cell; wrap_panel only adds the outer margin.
+        # Height floor comes from the canvas so the splitter above can move.
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self._setup_ui()
         self._sync_duration_edit()
