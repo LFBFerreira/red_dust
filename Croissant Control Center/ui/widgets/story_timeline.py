@@ -607,7 +607,7 @@ class StoryTimelinePanel(QWidget):
 
         hint = QLabel(
             "A clip turns that pin on. Orange Speed lane: click to add points, drag a polyline. "
-            "Empty speed lane uses the waveform Speed box. This board's Play does not start the other."
+            "Empty speed lane uses the waveform Speed box."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)

@@ -51,8 +51,7 @@ DEFAULT_WINDOW_HEIGHT = 800
 WIDGET_PANEL_MARGIN = 12  # Empty space around each major UI panel (pixels)
 
 # Interactive object cards.
-TAB_ICON_SIZE = 20  # Streaming status icon in object tabs (pixels)
-OBJECT_CARD_LEFT_PANEL_MAX_WIDTH = 300  # OSC/Serial name & connection column (pixels)
+TAB_ICON_SIZE = 20  # Streaming status dot on each object card (pixels)
 OSC_OBJECT_ENDPOINT_DEBOUNCE_MS = 500  # Apply OSC host/address after typing pauses (avoids DNS per key)
 
 

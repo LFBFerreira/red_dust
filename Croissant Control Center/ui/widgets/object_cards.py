@@ -8,8 +8,9 @@ import uuid
 from typing import Callable, Dict, List, Optional, Set
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap, QResizeEvent, QShowEvent
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPalette, QPixmap, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
@@ -18,11 +19,10 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
-    QSplitter,
+    QScrollArea,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
     QComboBox,
@@ -36,7 +36,6 @@ from core.pin_stream import (
 from .channel_colors import color_for_channel
 from settings import (
     MAX_PIN_SLOTS,
-    OBJECT_CARD_LEFT_PANEL_MAX_WIDTH,
     OSC_OBJECT_ENDPOINT_DEBOUNCE_MS,
     PIN_SLOT_LABELS,
     SERIAL_BAUDRATE,
@@ -46,9 +45,12 @@ from settings import (
 
 logger = logging.getLogger(__name__)
 
+# Combo placeholder. objects_mixin compares this exact string before opening a port.
+_SERIAL_PORT_PLACEHOLDER = "Select port..."
 
-def streaming_status_tab_icon(streaming: bool) -> QIcon:
-    """Small circle: green when streaming, red when idle (for tab bar)."""
+
+def streaming_status_icon(streaming: bool) -> QIcon:
+    """Small circle: green when streaming, red when idle."""
     pix = QPixmap(TAB_ICON_SIZE, TAB_ICON_SIZE)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
@@ -61,11 +63,31 @@ def streaming_status_tab_icon(streaming: bool) -> QIcon:
     return QIcon(pix)
 
 
-class ObjectCard(QWidget):
-    """Tab page widget for an interactive object (OSC or Serial)."""
+def _field_row(label: str, field: QWidget) -> QHBoxLayout:
+    row = QHBoxLayout()
+    row.addWidget(QLabel(label))
+    row.addWidget(field, 1)
+    return row
+
+
+def _limit_to_content_height(widget: QWidget) -> None:
+    """Let the widget use the column width, but not grow past its content height.
+
+    Preferred and Minimum still expand inside a resizable scroll area. Leftover
+    height was split across every row, and each new card inherited a taller hint.
+    """
+    policy = widget.sizePolicy()
+    policy.setHorizontalPolicy(QSizePolicy.Policy.Expanding)
+    policy.setVerticalPolicy(QSizePolicy.Policy.Maximum)
+    widget.setSizePolicy(policy)
+
+
+class ObjectCard(QFrame):
+    """One interactive object (OSC or Serial), stacked in the side column."""
 
     config_changed = Signal(str)
     display_title_changed = Signal(str, str)
+    close_requested = Signal(str)
     streaming_started = Signal(str)
     streaming_stopped = Signal(str)
 
@@ -98,26 +120,35 @@ class ObjectCard(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        main = QHBoxLayout()
-        main.setSpacing(12)
-        main.setContentsMargins(8, 8, 8, 8)
+        self.setFrameShape(QFrame.Shape.Box)
+        self.setFrameShadow(QFrame.Shadow.Plain)
+        self.setLineWidth(1)
+        self._apply_card_background()
+        root = QVBoxLayout(self)
+        root.setSpacing(8)
+        root.setContentsMargins(8, 8, 8, 8)
 
-        left = QVBoxLayout()
-        left.setSpacing(8)
+        header = QHBoxLayout()
+        self._status_label = QLabel()
+        self._status_label.setFixedSize(TAB_ICON_SIZE, TAB_ICON_SIZE)
+        header.addWidget(self._status_label)
+        self._header_title = QLabel()
+        title_font = self._header_title.font()
+        title_font.setBold(True)
+        self._header_title.setFont(title_font)
+        header.addWidget(self._header_title, 1)
+        close_button = QPushButton("×")
+        close_button.setFixedWidth(28)
+        close_button.setToolTip("Remove this object")
+        close_button.clicked.connect(self._on_close_clicked)
+        header.addWidget(close_button)
+        root.addLayout(header)
 
-        type_hint = QLabel(f"<i>{self._communication_type}</i>")
-        left.addWidget(type_hint)
-
-        title_row = QHBoxLayout()
-        title_row.addWidget(QLabel("Name:"))
         self.title_edit = QLineEdit()
         self.title_edit.setText(self._display_title)
         self.title_edit.textEdited.connect(self._on_title_edited)
-        title_row.addWidget(self.title_edit, 1)
-        left.addLayout(title_row)
+        root.addLayout(_field_row("Name:", self.title_edit))
 
-        station_row = QHBoxLayout()
-        station_row.addWidget(QLabel("Station:"))
         self.station_combo = QComboBox()
         self.station_combo.addItem("—")
         self.station_combo.addItem("Station 1")
@@ -127,73 +158,50 @@ class ObjectCard(QWidget):
             "Play/Stop and story gating go only to that board."
         )
         self.station_combo.currentIndexChanged.connect(self._on_station_changed)
-        station_row.addWidget(self.station_combo, 1)
-        left.addLayout(station_row)
+        root.addLayout(_field_row("Station:", self.station_combo))
 
         if self._communication_type == "OSC":
-            addr_row = QHBoxLayout()
-            addr_row.addWidget(QLabel("OSC path:"))
             self.address_edit = QLineEdit()
             self.address_edit.setText(
                 f"/red_dust/{self._display_title.lower().replace(' ', '_')}"
             )
-            self.address_edit.textChanged.connect(self._schedule_osc_endpoint_config_changed)
-            self.address_edit.editingFinished.connect(self._flush_osc_endpoint_config_changed)
-            addr_row.addWidget(self.address_edit, 1)
-            left.addLayout(addr_row)
+            self._wire_osc_endpoint_field(self.address_edit)
+            root.addLayout(_field_row("OSC path:", self.address_edit))
 
-            host_row = QHBoxLayout()
-            host_row.addWidget(QLabel("IP Address:"))
             self.host_edit = QLineEdit()
             self.host_edit.setText("127.0.0.1")
-            self.host_edit.textChanged.connect(self._schedule_osc_endpoint_config_changed)
-            self.host_edit.editingFinished.connect(self._flush_osc_endpoint_config_changed)
-            host_row.addWidget(self.host_edit, 1)
-            left.addLayout(host_row)
+            self._wire_osc_endpoint_field(self.host_edit)
+            root.addLayout(_field_row("IP Address:", self.host_edit))
 
             self._osc_endpoint_debounce_timer = QTimer(self)
             self._osc_endpoint_debounce_timer.setSingleShot(True)
             self._osc_endpoint_debounce_timer.setInterval(OSC_OBJECT_ENDPOINT_DEBOUNCE_MS)
             self._osc_endpoint_debounce_timer.timeout.connect(self._emit_osc_endpoint_config_changed)
         else:
-            port_row = QHBoxLayout()
-            port_row.addWidget(QLabel("Serial Port:"))
             self.port_combo = QComboBox()
             self.port_combo.setEditable(True)
             self._populate_serial_ports()
             self.port_combo.currentTextChanged.connect(self._on_serial_port_changed)
-            port_row.addWidget(self.port_combo, 1)
+            port_row = _field_row("Serial Port:", self.port_combo)
             self.retry_button = QPushButton("Retry")
             self.retry_button.setFixedWidth(72)
             self.retry_button.clicked.connect(self._on_retry_serial_connection)
             self.retry_button.setEnabled(False)
             port_row.addWidget(self.retry_button)
-            left.addLayout(port_row)
+            root.addLayout(port_row)
 
-        stream_btns = QHBoxLayout()
+        action_row = QHBoxLayout()
         self.stream_toggle_button = QPushButton("Start")
         self.stream_toggle_button.clicked.connect(self._on_stream_toggle_clicked)
-        stream_btns.addWidget(self.stream_toggle_button, 1)
-        left.addLayout(stream_btns)
-
-        left.addStretch()
-
-        left_wrap = QWidget()
-        left_wrap.setLayout(left)
-        left_wrap.setMinimumWidth(220)
-        left_wrap.setMaximumWidth(OBJECT_CARD_LEFT_PANEL_MAX_WIDTH)
-
-        right = QVBoxLayout()
-        add_row = QHBoxLayout()
+        action_row.addWidget(self.stream_toggle_button, 1)
         self.add_channels_button = QPushButton("Add channels")
         self.add_channels_button.setToolTip(
             "Adds each currently selected waveform channel as a pin row "
             f"(max {MAX_PIN_SLOTS}). Duplicate channels are skipped."
         )
         self.add_channels_button.clicked.connect(self._on_add_from_selection)
-        add_row.addWidget(self.add_channels_button)
-        add_row.addStretch()
-        right.addLayout(add_row)
+        action_row.addWidget(self.add_channels_button, 1)
+        root.addLayout(action_row)
 
         self.pin_table = QTableWidget(0, 7)
         self.pin_table.setHorizontalHeaderLabels(
@@ -204,22 +212,79 @@ class ObjectCard(QWidget):
         for col in range(self.pin_table.columnCount()):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
         self.pin_table.verticalHeader().setVisible(False)
-        right.addWidget(self.pin_table, 1)
+        self.pin_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.pin_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        root.addWidget(self.pin_table)
         self.pin_table.viewport().installEventFilter(self)
 
-        right_wrap = QWidget()
-        right_wrap.setLayout(right)
+        _limit_to_content_height(self)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(left_wrap)
-        splitter.addWidget(right_wrap)
-        splitter.setStretchFactor(1, 1)
-        splitter.splitterMoved.connect(self._schedule_equalize_pin_table_column_widths)
-        main.addWidget(splitter)
-        self.setLayout(main)
+        self._sync_header_title()
+        self._apply_status_icon()
         self._update_add_button_state()
         self._update_stream_button()
         self._schedule_equalize_pin_table_column_widths()
+
+    def _apply_card_background(self) -> None:
+        """Field color (Base) against the column's window gray, in light or dark theme."""
+        base = QApplication.palette().color(QPalette.ColorRole.Base)
+        if self.autoFillBackground() and self.palette().color(QPalette.ColorRole.Window) == base:
+            return
+        pal = self.palette()
+        pal.setColor(QPalette.ColorRole.Window, base)
+        self.setPalette(pal)
+        self.setAutoFillBackground(True)
+
+    def _sync_header_title(self) -> None:
+        self._header_title.setText(f"{self._display_title} ({self._communication_type})")
+
+    def changeEvent(self, event: QEvent) -> None:
+        refresh_types = {QEvent.Type.PaletteChange, QEvent.Type.StyleChange}
+        if hasattr(QEvent.Type, "ApplicationPaletteChange"):
+            refresh_types.add(QEvent.Type.ApplicationPaletteChange)
+        if event.type() in refresh_types:
+            self._apply_card_background()
+        super().changeEvent(event)
+
+    def _fit_pin_table_height(self) -> None:
+        """Size the table to its rows so the card column scrolls instead of clipping them."""
+        table = self.pin_table
+        table.resizeRowsToContents()
+        header_h = table.horizontalHeader().height()
+        if header_h < 1:
+            header_h = table.horizontalHeader().sizeHint().height()
+        if table.rowCount() == 0:
+            rows_h = table.verticalHeader().defaultSectionSize()
+        else:
+            rows_h = sum(table.rowHeight(r) for r in range(table.rowCount()))
+        height = header_h + rows_h + table.frameWidth() * 2 + 2
+        table.setFixedHeight(max(header_h + 8, height))
+        self._notify_cards_extent()
+
+    def _cards_container(self) -> Optional["ObjectCardsContainer"]:
+        parent = self.parent()
+        while parent is not None:
+            if isinstance(parent, ObjectCardsContainer):
+                return parent
+            parent = parent.parent()
+        return None
+
+    def _notify_cards_extent(self) -> None:
+        self.updateGeometry()
+        container = self._cards_container()
+        if container is not None:
+            container._sync_cards_extent()
+
+    def _wire_osc_endpoint_field(self, edit: QLineEdit) -> None:
+        edit.textChanged.connect(self._schedule_osc_endpoint_config_changed)
+        edit.editingFinished.connect(self._flush_osc_endpoint_config_changed)
+
+    def _apply_status_icon(self) -> None:
+        icon = streaming_status_icon(self._streaming)
+        self._status_label.setPixmap(icon.pixmap(TAB_ICON_SIZE, TAB_ICON_SIZE))
+
+    def _on_close_clicked(self) -> None:
+        self.close_requested.emit(self._object_id)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if (
@@ -231,6 +296,7 @@ class ObjectCard(QWidget):
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
+        self._fit_pin_table_height()
         self._schedule_equalize_pin_table_column_widths()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -268,6 +334,7 @@ class ObjectCard(QWidget):
 
     def _on_title_edited(self, text: str) -> None:
         self._display_title = text
+        self._sync_header_title()
         self.display_title_changed.emit(self._object_id, text)
 
     def _on_station_changed(self, _index: int) -> None:
@@ -390,48 +457,24 @@ class ObjectCard(QWidget):
             ch_item.setFlags(ch_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.pin_table.setItem(i, 1, ch_item)
 
-            min_spin = QDoubleSpinBox()
-            min_spin.setRange(-1e6, 1e6)
-            min_spin.setDecimals(3)
-            min_spin.setSingleStep(0.05)
-            min_spin.setKeyboardTracking(False)
-            min_spin.blockSignals(True)
-            min_spin.setValue(row["remap_min"])
-            min_spin.blockSignals(False)
-            min_spin.valueChanged.connect(
-                lambda _v, r=row, s=min_spin: self._on_row_min_changed(r, s)
+            self._put_remap_spin(
+                i, 2, row, row["remap_min"], -1e6, 1e6, 0.05, self._on_row_min_changed
             )
-            self.pin_table.setCellWidget(i, 2, min_spin)
-
-            max_spin = QDoubleSpinBox()
-            max_spin.setRange(-1e6, 1e6)
-            max_spin.setDecimals(3)
-            max_spin.setSingleStep(0.05)
-            max_spin.setKeyboardTracking(False)
-            max_spin.blockSignals(True)
-            max_spin.setValue(row["remap_max"])
-            max_spin.blockSignals(False)
-            max_spin.valueChanged.connect(
-                lambda _v, r=row, s=max_spin: self._on_row_max_changed(r, s)
+            self._put_remap_spin(
+                i, 3, row, row["remap_max"], -1e6, 1e6, 0.05, self._on_row_max_changed
             )
-            self.pin_table.setCellWidget(i, 3, max_spin)
-
-            scale_spin = QDoubleSpinBox()
-            scale_spin.setRange(0.0, 100.0)
-            scale_spin.setDecimals(3)
-            scale_spin.setSingleStep(0.1)
-            scale_spin.setKeyboardTracking(False)
-            scale_spin.blockSignals(True)
-            scale_spin.setValue(float(row.get("remap_scale", 1.0)))
-            scale_spin.blockSignals(False)
-            scale_spin.setToolTip(
+            self._put_remap_spin(
+                i,
+                4,
+                row,
+                float(row.get("remap_scale", 1.0)),
+                0.0,
+                100.0,
+                0.1,
+                self._on_row_scale_changed,
                 "Multiplies the 0..1 channel sample before clamping to Min..Max "
-                "(1 = unchanged amplitude; <1 quieter; >1 louder until capped)."
+                "(1 = unchanged amplitude; <1 quieter; >1 louder until capped).",
             )
-            scale_spin.valueChanged.connect(
-                lambda _v, r=row, s=scale_spin: self._on_row_scale_changed(r, s)
-            )
-            self.pin_table.setCellWidget(i, 4, scale_spin)
 
             bar = QProgressBar()
             bar.setRange(0, 100)
@@ -448,7 +491,33 @@ class ObjectCard(QWidget):
             self.pin_table.setCellWidget(i, 6, rm)
 
         self._restyle_active_rows()
+        self._fit_pin_table_height()
         self._schedule_equalize_pin_table_column_widths()
+
+    def _put_remap_spin(
+        self,
+        table_row: int,
+        column: int,
+        row: dict,
+        value: float,
+        minimum: float,
+        maximum: float,
+        step: float,
+        on_change: Callable[[dict, QDoubleSpinBox], None],
+        tooltip: str = "",
+    ) -> None:
+        spin = QDoubleSpinBox()
+        spin.setRange(minimum, maximum)
+        spin.setDecimals(3)
+        spin.setSingleStep(step)
+        spin.setKeyboardTracking(False)
+        if tooltip:
+            spin.setToolTip(tooltip)
+        spin.blockSignals(True)
+        spin.setValue(value)
+        spin.blockSignals(False)
+        spin.valueChanged.connect(lambda _v, r=row, s=spin: on_change(r, s))
+        self.pin_table.setCellWidget(table_row, column, spin)
 
     def _on_row_min_changed(self, row: dict, spin: QDoubleSpinBox) -> None:
         lo = spin.value()
@@ -516,6 +585,18 @@ class ObjectCard(QWidget):
     def get_display_title(self) -> str:
         return self.title_edit.text()
 
+    def _show_unusable_serial_ports(self, current_port_valid: bool) -> None:
+        """Reset the combo after listing fails.
+
+        Signals stay blocked so the placeholder does not schedule another refresh.
+        """
+        self.port_combo.blockSignals(True)
+        self.port_combo.clear()
+        self.port_combo.addItem(_SERIAL_PORT_PLACEHOLDER)
+        if not current_port_valid:
+            self.port_combo.setCurrentText(_SERIAL_PORT_PLACEHOLDER)
+        self.port_combo.blockSignals(False)
+
     def _populate_serial_ports(self, excluded_ports: Optional[Set[str]] = None) -> None:
         if self._communication_type != "Serial":
             return
@@ -530,7 +611,7 @@ class ObjectCard(QWidget):
             current_port = self.port_combo.currentText()
             is_current_port_valid = (
                 current_port
-                and current_port != "Select port..."
+                and current_port != _SERIAL_PORT_PLACEHOLDER
                 and current_port.strip() != ""
             )
 
@@ -552,11 +633,11 @@ class ObjectCard(QWidget):
                 self.port_combo.addItems(filtered_ports)
 
                 if not filtered_ports:
-                    self.port_combo.addItem("Select port...")
+                    self.port_combo.addItem(_SERIAL_PORT_PLACEHOLDER)
                     if not is_current_port_valid:
-                        self.port_combo.setCurrentText("Select port...")
+                        self.port_combo.setCurrentText(_SERIAL_PORT_PLACEHOLDER)
                 else:
-                    self.port_combo.insertItem(0, "Select port...")
+                    self.port_combo.insertItem(0, _SERIAL_PORT_PLACEHOLDER)
                     if is_current_port_valid and current_port in filtered_ports:
                         self.port_combo.setCurrentText(current_port)
                     else:
@@ -567,20 +648,10 @@ class ObjectCard(QWidget):
                 print(
                     "Warning: RecursionError while listing serial ports (problematic device detected)"
                 )
-                self.port_combo.blockSignals(True)
-                self.port_combo.clear()
-                self.port_combo.addItem("Select port...")
-                if not is_current_port_valid:
-                    self.port_combo.setCurrentText("Select port...")
-                self.port_combo.blockSignals(False)
+                self._show_unusable_serial_ports(is_current_port_valid)
             except Exception as e:
                 print(f"Error: Failed to list serial ports: {type(e).__name__}: {e}")
-                self.port_combo.blockSignals(True)
-                self.port_combo.clear()
-                self.port_combo.addItem("Select port...")
-                if not is_current_port_valid:
-                    self.port_combo.setCurrentText("Select port...")
-                self.port_combo.blockSignals(False)
+                self._show_unusable_serial_ports(is_current_port_valid)
         finally:
             self._refreshing_ports = False
 
@@ -590,11 +661,11 @@ class ObjectCard(QWidget):
         if port_name not in current_items:
             self.port_combo.addItem(port_name)
 
-        if port_name and port_name != "Select port...":
+        if port_name and port_name != _SERIAL_PORT_PLACEHOLDER:
             self.port_combo.setCurrentText(port_name)
         else:
             self.port_combo.blockSignals(True)
-            self.port_combo.setCurrentText("Select port...")
+            self.port_combo.setCurrentText(_SERIAL_PORT_PLACEHOLDER)
             self.port_combo.blockSignals(False)
 
     def _on_serial_port_changed(self, port_name: str) -> None:
@@ -607,12 +678,9 @@ class ObjectCard(QWidget):
             self._request_port_refresh()
 
     def _request_port_refresh(self) -> None:
-        parent = self.parent()
-        while parent:
-            if isinstance(parent, ObjectCardsContainer):
-                parent._refresh_all_serial_ports()
-                break
-            parent = parent.parent()
+        container = self._cards_container()
+        if container is not None:
+            container._refresh_all_serial_ports()
 
     def _on_stream_toggle_clicked(self) -> None:
         if self._streaming:
@@ -622,11 +690,13 @@ class ObjectCard(QWidget):
 
     def _on_start_clicked(self) -> None:
         self._streaming = True
+        self._apply_status_icon()
         self.streaming_started.emit(self._object_id)
         self._update_stream_button()
 
     def _on_stop_clicked(self) -> None:
         self._streaming = False
+        self._apply_status_icon()
         self.streaming_stopped.emit(self._object_id)
         self._update_stream_button()
 
@@ -634,18 +704,16 @@ class ObjectCard(QWidget):
         if streaming == self._streaming:
             return
         if streaming:
-            if not self._streaming:
-                self._on_start_clicked()
+            self._on_start_clicked()
         else:
-            if self._streaming:
-                self._on_stop_clicked()
+            self._on_stop_clicked()
 
     def set_connection_state(self, connected: bool) -> None:
         if self._communication_type == "Serial":
             self._serial_connected = connected
             if not connected:
                 port_name = self.port_combo.currentText()
-                if port_name and port_name != "Select port...":
+                if port_name and port_name != _SERIAL_PORT_PLACEHOLDER:
                     self.retry_button.setEnabled(True)
                 else:
                     self.retry_button.setEnabled(False)
@@ -660,7 +728,7 @@ class ObjectCard(QWidget):
             return
 
         port_name = self.port_combo.currentText()
-        if port_name and port_name != "Select port...":
+        if port_name and port_name != _SERIAL_PORT_PLACEHOLDER:
             self.config_changed.emit(self._object_id)
 
     def set_active_channel(self, channel: Optional[str]) -> None:
@@ -800,7 +868,7 @@ class ObjectCard(QWidget):
 
 
 class ObjectCardsContainer(QFrame):
-    """Container widget for multiple interactive objects (tabbed)."""
+    """Vertical list of interactive objects in the side column."""
 
     object_added = Signal(str)
     object_removed = Signal(str)
@@ -857,12 +925,18 @@ class ObjectCardsContainer(QFrame):
         header_layout.addWidget(add_serial_button)
         layout.addLayout(header_layout)
 
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setTabsClosable(True)
-        self.tab_widget.tabCloseRequested.connect(self._on_tab_close_requested)
-        self.tab_widget.setAutoFillBackground(True)
-        self._refresh_interactive_objects_tab_style()
-        layout.addWidget(self.tab_widget)
+        self._cards_host = QWidget()
+        self._cards_layout = QVBoxLayout(self._cards_host)
+        self._cards_layout.setContentsMargins(0, 0, 0, 0)
+        self._cards_layout.setSpacing(12)
+        _limit_to_content_height(self._cards_host)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(self._cards_host)
+        layout.addWidget(scroll, 1)
 
         sp = self.sizePolicy()
         sp.setHorizontalPolicy(QSizePolicy.Policy.Expanding)
@@ -870,60 +944,26 @@ class ObjectCardsContainer(QFrame):
         self.setSizePolicy(sp)
         self.setLayout(layout)
 
-    @staticmethod
-    def _interactive_objects_tab_stylesheet() -> str:
-        """QSS tied to the application palette so tabs track light/dark theme switches."""
-        return """
-            QTabWidget::pane {
-                border: 1px solid palette(mid);
-                background: palette(window);
-            }
-            QTabBar::tab {
-                background: palette(button);
-                color: palette(button-text);
-                padding: 5px 12px;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background: palette(window);
-                color: palette(window-text);
-                font-weight: bold;
-                font-size: 1.09em;
-            }
-            QTabBar::tab:hover:!selected {
-                background: palette(alternate-base);
-            }
+    def _sync_cards_extent(self) -> None:
+        """Keep the card column at the height of its contents.
+
+        A minimum height copied from sizeHint ratchets: stretched cards report
+        a taller hint, and the next card opens with a larger gap between rows.
         """
+        self._cards_host.setMinimumHeight(0)
+        self._cards_host.updateGeometry()
 
-    def _refresh_interactive_objects_tab_style(self) -> None:
-        if not hasattr(self, "tab_widget"):
-            return
-        self.tab_widget.setStyleSheet(self._interactive_objects_tab_stylesheet())
-        self.tab_widget.update()
+    def _refresh_object_card_style(self) -> None:
+        for card in self._cards.values():
+            card._apply_card_background()
 
-    def changeEvent(self, event: QEvent) -> None:
-        _et = event.type()
-        _refresh_types = {QEvent.Type.PaletteChange, QEvent.Type.StyleChange}
-        if hasattr(QEvent.Type, "ApplicationPaletteChange"):
-            _refresh_types.add(QEvent.Type.ApplicationPaletteChange)
-        if _et in _refresh_types:
-            self._refresh_interactive_objects_tab_style()
-        super().changeEvent(event)
-
-    def _on_tab_close_requested(self, index: int) -> None:
-        card = self.tab_widget.widget(index)
-        if not isinstance(card, ObjectCard):
-            return
-        self._remove_object(card.get_object_id())
-
-    def _next_default_title(self, communication_type: str) -> str:
+    def _next_default_title(self) -> str:
         counter = 1
-        base_name = f"{communication_type} Object"
         titles = {c.get_display_title() for c in self._cards.values()}
-        name = f"{base_name} {counter}"
+        name = f"Object {counter}"
         while name in titles:
             counter += 1
-            name = f"{base_name} {counter}"
+            name = f"Object {counter}"
         return name
 
     def _add_object(
@@ -936,7 +976,7 @@ class ObjectCardsContainer(QFrame):
         if object_id is None:
             object_id = str(uuid.uuid4())
         if display_title is None:
-            display_title = self._next_default_title(communication_type)
+            display_title = self._next_default_title()
 
         card = ObjectCard(
             object_id,
@@ -947,14 +987,11 @@ class ObjectCardsContainer(QFrame):
             parent=self,
         )
         card.config_changed.connect(self.object_config_changed.emit)
-        card.display_title_changed.connect(self._on_display_title_changed)
-        card.streaming_started.connect(self._on_streaming_started)
-        card.streaming_stopped.connect(self._on_streaming_stopped)
+        card.close_requested.connect(self._remove_object)
 
-        idx = self.tab_widget.addTab(card, display_title)
-        self.tab_widget.setCurrentIndex(idx)
+        self._cards_layout.addWidget(card)
         self._cards[object_id] = card
-        self._apply_tab_streaming_icon(object_id)
+        self._sync_cards_extent()
 
         if communication_type == "Serial":
             excluded = self._get_used_serial_ports(exclude_object_id=object_id)
@@ -977,31 +1014,8 @@ class ObjectCardsContainer(QFrame):
                         card.address_edit.blockSignals(False)
                     break
             self.object_added.emit(object_id)
-        logger.info("Added %s object tab: %s", communication_type, object_id)
+        logger.info("Added %s object: %s", communication_type, object_id)
         return card
-
-    def _on_display_title_changed(self, object_id: str, title: str) -> None:
-        card = self._cards.get(object_id)
-        if not card:
-            return
-        idx = self.tab_widget.indexOf(card)
-        if idx >= 0:
-            self.tab_widget.setTabText(idx, title)
-
-    def _apply_tab_streaming_icon(self, object_id: str) -> None:
-        card = self._cards.get(object_id)
-        if not card:
-            return
-        idx = self.tab_widget.indexOf(card)
-        if idx < 0:
-            return
-        self.tab_widget.setTabIcon(idx, streaming_status_tab_icon(card._streaming))
-
-    def _on_streaming_started(self, object_id: str) -> None:
-        self._apply_tab_streaming_icon(object_id)
-
-    def _on_streaming_stopped(self, object_id: str) -> None:
-        self._apply_tab_streaming_icon(object_id)
 
     def _remove_object(self, object_id: str) -> None:
         if object_id not in self._cards:
@@ -1010,17 +1024,16 @@ class ObjectCardsContainer(QFrame):
         card = self._cards[object_id]
         was_serial = card._communication_type == "Serial"
 
-        idx = self.tab_widget.indexOf(card)
-        if idx >= 0:
-            self.tab_widget.removeTab(idx)
-
+        self._cards_layout.removeWidget(card)
+        card.setParent(None)
         card.deleteLater()
         del self._cards[object_id]
+        self._sync_cards_extent()
 
         if was_serial:
             self._refresh_all_serial_ports()
         self.object_removed.emit(object_id)
-        logger.info("Removed object tab: %s", object_id)
+        logger.info("Removed object: %s", object_id)
 
     def get_card(self, object_id: str) -> Optional[ObjectCard]:
         return self._cards.get(object_id)
@@ -1035,7 +1048,7 @@ class ObjectCardsContainer(QFrame):
                 continue
             if card._communication_type == "Serial":
                 port = card.port_combo.currentText()
-                if port and port != "Select port..." and port.strip() != "":
+                if port and port != _SERIAL_PORT_PLACEHOLDER and port.strip() != "":
                     used_ports.add(port)
         return used_ports
 
