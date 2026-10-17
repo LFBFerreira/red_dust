@@ -13,7 +13,7 @@ if _project_root_str not in sys.path:
 
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QComboBox, QPushButton, QProgressBar)
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 import logging
 from settings import (
     DEFAULT_STATION, 

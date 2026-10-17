@@ -20,7 +20,7 @@ def wrap_panel(widget: QWidget, margin: int | None = None) -> QWidget:
 
 
 def flush_vbox(parent: QWidget) -> QVBoxLayout:
-    """Splitter child with no gap of its own. Spacing comes from ``wrap_panel``."""
+    """Zero-margin column. Callers may setSpacing; outer gap usually comes from wrap_panel."""
     layout = QVBoxLayout(parent)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(0)

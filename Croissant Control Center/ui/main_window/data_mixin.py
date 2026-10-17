@@ -24,6 +24,12 @@ def _format_dataset_utc(when: Any) -> str:
         return str(when)
 
 
+def _format_duration_hours(hours: float) -> str:
+    if abs(hours - round(hours)) < 1e-6:
+        return f"{int(round(hours))} hours"
+    return f"{hours:.2f} hours"
+
+
 class MainWindowDataMixin(_MainWindowBase):
     """Waveform data fetch, model updates, and metadata UI."""
 
@@ -274,31 +280,23 @@ Duration: {duration_h:.2f} hours"""
         win = getattr(self, "_fullscreen_window", None)
         if win is None:
             return
-        if not self.waveform_model.get_stream():
-            win.set_dataset_fields(empty_message=DATASET_METADATA_EMPTY_MESSAGE)
-            return
         stream = self.waveform_model.get_stream()
         if stream is None or len(stream) == 0:
             win.set_dataset_fields(empty_message=DATASET_METADATA_EMPTY_MESSAGE)
             return
         trace = stream[0]
         selected = self.waveform_model.get_selected_channels()
-        selected_line = ", ".join(selected) if selected else "—"
         time_range_line = None
         duration_line = None
         time_range = self.waveform_model.get_time_range()
         if time_range:
             t0, t1 = time_range[0], time_range[1]
-            duration_h = float(t1 - t0) / 3600.0
             time_range_line = f"{_format_dataset_utc(t0)} – {_format_dataset_utc(t1)}"
-            if abs(duration_h - round(duration_h)) < 1e-6:
-                duration_line = f"{int(round(duration_h))} hours"
-            else:
-                duration_line = f"{duration_h:.2f} hours"
+            duration_line = _format_duration_hours(float(t1 - t0) / 3600.0)
         win.set_dataset_fields(
             network=str(trace.stats.network),
             station=str(trace.stats.station),
-            selected_channels=selected_line,
+            selected_channels=", ".join(selected) if selected else "—",
             time_range=time_range_line,
             duration=duration_line,
         )

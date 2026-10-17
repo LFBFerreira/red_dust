@@ -208,13 +208,18 @@ class MainWindow(
         waveform_column = QWidget()
         waveform_column_layout = flush_vbox(waveform_column)
 
+        # One outer wrap around plot + transport so the gap between them is a
+        # single panel margin, not the stacked bottoms/tops of two wraps.
+        waveform_stack = QWidget()
+        waveform_stack_layout = flush_vbox(waveform_stack)
+        waveform_stack_layout.setSpacing(WIDGET_PANEL_MARGIN)
         self.waveform_viewer = WaveformViewer()
         set_vertical_policy(self.waveform_viewer, QSizePolicy.Policy.Expanding)
-        waveform_column_layout.addWidget(wrap_panel(self.waveform_viewer), 1)
-
+        waveform_stack_layout.addWidget(self.waveform_viewer, 1)
         self.playback_controls = PlaybackControls()
         set_vertical_policy(self.playback_controls, QSizePolicy.Policy.Fixed)
-        waveform_column_layout.addWidget(wrap_panel(self.playback_controls), 0)
+        waveform_stack_layout.addWidget(self.playback_controls, 0)
+        waveform_column_layout.addWidget(wrap_panel(waveform_stack), 1)
 
         self._top_column_splitter.addWidget(left_column)
         self._top_column_splitter.addWidget(waveform_column)
@@ -455,6 +460,10 @@ class MainWindow(
 
         self.playback_controller.state_changed.connect(self._on_playback_state_changed)
 
+    def _fullscreen_preview_visible(self) -> bool:
+        win = self._fullscreen_window
+        return win is not None and win.isVisible()
+
     def _on_fullscreen_menu_toggled(self, checked: bool) -> None:
         if checked:
             self._open_fullscreen_preview()
@@ -475,19 +484,16 @@ class MainWindow(
         self._sync_fullscreen_menu()
 
     def _close_fullscreen_preview(self) -> None:
-        win = self._fullscreen_window
-        if win is not None and win.isVisible():
-            win.close()
+        if self._fullscreen_preview_visible():
+            self._fullscreen_window.close()
         self._sync_fullscreen_menu()
 
     def _sync_fullscreen_menu(self) -> None:
         action = getattr(self, "_fullscreen_action", None)
         if action is None:
             return
-        win = self._fullscreen_window
-        visible = win is not None and win.isVisible()
         action.blockSignals(True)
-        action.setChecked(visible)
+        action.setChecked(self._fullscreen_preview_visible())
         action.blockSignals(False)
 
     def _on_fullscreen_window_destroyed(self, *_args) -> None:
@@ -495,15 +501,16 @@ class MainWindow(
         self._sync_fullscreen_menu()
 
     def _sync_fullscreen_preview(self) -> None:
-        """Push dataset info and the live 10 min paging waveform into the full-screen window."""
+        """Push dataset info and the live paging waveform into the full-screen window."""
         win = self._fullscreen_window
         if win is None:
             return
         self._sync_fullscreen_metadata()
-        loop_range = self.playback_controls.get_loop_range_from_inputs()
-        if loop_range is None:
-            loop_range = self.playback_controller.get_loop_range()
-        time_span = loop_range or self.waveform_model.get_time_range()
+        time_span = (
+            self.playback_controls.get_loop_range_from_inputs()
+            or self.playback_controller.get_loop_range()
+            or self.waveform_model.get_time_range()
+        )
         win.set_live_source(
             self.waveform_model.get_stream(),
             self.waveform_model.get_selected_channels(),

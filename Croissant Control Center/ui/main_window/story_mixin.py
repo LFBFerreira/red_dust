@@ -49,25 +49,25 @@ class MainWindowStoryMixin(_MainWindowBase):
 
     def _apply_story_speed(self, station: int, time_sec: float) -> None:
         panel = self.story_timelines[station]
+        envelope = self.speed_envelopes[station]
         # While the number box is focused, hold the typed speed. The envelope
         # catch-up on edit-finished would otherwise fight each keystroke.
         if panel.speed_input_active():
             speed = panel.speed_input_value()
+        elif envelope.has_points():
+            speed = envelope.speed_at(time_sec)
         else:
-            envelope = self.speed_envelopes[station]
-            if envelope.has_points():
-                speed = envelope.speed_at(time_sec)
-            else:
-                speed = self.playback_controller.get_speed()
+            speed = self.playback_controller.get_speed()
         can_drive = (
             self.story_clocks[station].get_state() == "playing"
             or not self._other_station_playing(station)
         )
-        if (
-            (panel.speed_input_active() or self.speed_envelopes[station].has_points())
+        should_push = (
+            (panel.speed_input_active() or envelope.has_points())
             and can_drive
             and abs(speed - self.playback_controller.get_speed()) >= 0.05
-        ):
+        )
+        if should_push:
             self.playback_controller.set_speed(speed, log=False)
             spin = self.playback_controls.speed_spinbox
             spin.blockSignals(True)
