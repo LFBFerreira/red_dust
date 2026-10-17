@@ -10,7 +10,7 @@ import numpy as np
 import pyqtgraph as pg
 from obspy import Stream, UTCDateTime
 from pyqtgraph import AxisItem
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
@@ -105,6 +105,7 @@ class WaveformViewer(QWidget):
     """Widget for displaying multi-channel waveform data."""
 
     loop_range_selected = Signal(UTCDateTime, UTCDateTime)
+    fullscreen_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -159,9 +160,11 @@ class WaveformViewer(QWidget):
 
         self.plot_widget.scene().sigMouseClicked.connect(self._on_mouse_click)
         self.plot_widget.scene().sigMouseMoved.connect(self._on_mouse_move)
+        self.plot_widget.viewport().installEventFilter(self)
 
         self._drag_start = None
         self._is_dragging = False
+        self._ignore_next_plot_click = False
 
         layout.addWidget(self.plot_widget, 1)
         self.setLayout(layout)
@@ -515,7 +518,26 @@ class WaveformViewer(QWidget):
         else:
             self.clear_loop_markers()
 
+    def eventFilter(self, watched, event) -> bool:
+        # The scene click signal reports the first press, not the double-click.
+        if (
+            watched is self.plot_widget.viewport()
+            and event.type() == QEvent.Type.MouseButtonDblClick
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            self._is_dragging = False
+            self._drag_start = None
+            self._ignore_next_plot_click = True
+            self.fullscreen_requested.emit()
+            return True
+        return super().eventFilter(watched, event)
+
     def _on_mouse_click(self, event):
+        if self._ignore_next_plot_click:
+            self._ignore_next_plot_click = False
+            self._is_dragging = False
+            self._drag_start = None
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             pos = self.plot_widget.plotItem.vb.mapSceneToView(event.scenePos())
             if self.plot_widget.plotItem.vb.sceneBoundingRect().contains(

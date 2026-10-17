@@ -31,7 +31,6 @@ class DataPicker(QWidget):
     
     # Signal emitted when user clicks "Load Data"
     load_requested = Signal(dict)  # Emits: {"network": str, "station": str, "year": int, "doy": int}
-    fullscreen_requested = Signal()
     
     def __init__(self, parent=None, data_manager=None):
         """
@@ -108,13 +107,6 @@ class DataPicker(QWidget):
         self.load_button.clicked.connect(self._on_load_clicked)
         layout.addWidget(self.load_button)
 
-        self.fullscreen_button = QPushButton("Full Screen")
-        self.fullscreen_button.setToolTip(
-            "Open a full-screen view of dataset information and the loop-region waveform"
-        )
-        self.fullscreen_button.clicked.connect(self.fullscreen_requested.emit)
-        layout.addWidget(self.fullscreen_button)
-        
         # Loading indicator
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)

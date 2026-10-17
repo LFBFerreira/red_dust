@@ -403,7 +403,7 @@ class MainWindow(
     def _connect_signals(self):
         """Connect signals and slots."""
         self.data_picker.load_requested.connect(self._on_load_requested)
-        self.data_picker.fullscreen_requested.connect(self._on_fullscreen_requested)
+        self.waveform_viewer.fullscreen_requested.connect(self._open_fullscreen_preview)
 
         self.playback_controls.play_clicked.connect(self._on_play_requested)
         self.playback_controls.pause_clicked.connect(self.playback_controller.pause)
@@ -455,12 +455,15 @@ class MainWindow(
 
         self.playback_controller.state_changed.connect(self._on_playback_state_changed)
 
-    def _on_fullscreen_requested(self) -> None:
-        """Open or close the full-screen dataset + loop waveform window."""
+    def _on_fullscreen_menu_toggled(self, checked: bool) -> None:
+        if checked:
+            self._open_fullscreen_preview()
+        else:
+            self._close_fullscreen_preview()
+
+    def _open_fullscreen_preview(self) -> None:
+        """Show the full-screen dataset and loop-region waveform."""
         win = self._fullscreen_window
-        if win is not None and win.isVisible():
-            win.close()
-            return
         if win is None:
             win = FullscreenPreviewWindow(self)
             win.destroyed.connect(self._on_fullscreen_window_destroyed)
@@ -469,9 +472,27 @@ class MainWindow(
         win.showFullScreen()
         win.raise_()
         win.activateWindow()
+        self._sync_fullscreen_menu()
+
+    def _close_fullscreen_preview(self) -> None:
+        win = self._fullscreen_window
+        if win is not None and win.isVisible():
+            win.close()
+        self._sync_fullscreen_menu()
+
+    def _sync_fullscreen_menu(self) -> None:
+        action = getattr(self, "_fullscreen_action", None)
+        if action is None:
+            return
+        win = self._fullscreen_window
+        visible = win is not None and win.isVisible()
+        action.blockSignals(True)
+        action.setChecked(visible)
+        action.blockSignals(False)
 
     def _on_fullscreen_window_destroyed(self, *_args) -> None:
         self._fullscreen_window = None
+        self._sync_fullscreen_menu()
 
     def _sync_fullscreen_preview(self) -> None:
         """Push dataset info and the live 10 min paging waveform into the full-screen window."""
