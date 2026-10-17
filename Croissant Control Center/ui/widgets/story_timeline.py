@@ -553,20 +553,28 @@ class StoryTimelineCanvas(QWidget):
         return marks
 
 
-def _add_expanding_button(
-    layout: QHBoxLayout,
+def _toolbar_button(
     text: str,
     on_click,
     tooltip: str | None = None,
 ) -> QPushButton:
-    """Toolbar button that absorbs spare width. Labels beside it stay at their size hint."""
+    """Compact toolbar button; section stretches absorb spare width."""
     button = QPushButton(text)
-    button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     if tooltip:
         button.setToolTip(tooltip)
     button.clicked.connect(on_click)
-    layout.addWidget(button, 1)
     return button
+
+
+def _toolbar_section(alignment: Qt.AlignmentFlag) -> tuple[QWidget, QHBoxLayout]:
+    """Equal-width toolbar zone; widgets pack to the given edge or center."""
+    host = QWidget()
+    row = QHBoxLayout(host)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(6)
+    row.setAlignment(alignment)
+    return host, row
 
 
 class StoryTimelinePanel(QWidget):
@@ -619,21 +627,27 @@ class StoryTimelinePanel(QWidget):
 
         layout.addWidget(panel_title(f"<b>{self._title}</b>"))
 
-        hint = QLabel(
-            "A clip turns that pin on. Orange Speed lane: click to add points, drag a polyline. "
-            "Empty speed lane uses the waveform Speed box."
-        )
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
         controls = QHBoxLayout()
-        self.play_button = _add_expanding_button(controls, "Play", self.play_clicked.emit)
-        self.pause_button = _add_expanding_button(controls, "Pause", self.pause_clicked.emit)
-        self.stop_button = _add_expanding_button(controls, "Stop", self.stop_clicked.emit)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(8)
 
+        transport, transport_row = _toolbar_section(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.play_button = _toolbar_button("Play", self.play_clicked.emit)
+        self.pause_button = _toolbar_button("Pause", self.pause_clicked.emit)
+        self.stop_button = _toolbar_button("Stop", self.stop_clicked.emit)
+        transport_row.addWidget(self.play_button)
+        transport_row.addWidget(self.pause_button)
+        transport_row.addWidget(self.stop_button)
+        controls.addWidget(transport, 1)
+
+        middle, middle_row = _toolbar_section(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+        )
         self.time_label = QLabel("0:00 / 14:30")
         self.time_label.setMinimumWidth(90)
-        controls.addWidget(self.time_label)
+        middle_row.addWidget(self.time_label)
         self.speed_spin = QDoubleSpinBox()
         self.speed_spin.setRange(STORY_SPEED_MIN, STORY_SPEED_MAX)
         self.speed_spin.setDecimals(0)
@@ -646,15 +660,13 @@ class StoryTimelinePanel(QWidget):
         )
         self.speed_spin.valueChanged.connect(self._on_speed_spin_changed)
         self.speed_spin.editingFinished.connect(self.speed_edit_finished.emit)
-        controls.addWidget(self.speed_spin)
-
-        controls.addWidget(QLabel("Duration:"))
+        middle_row.addWidget(self.speed_spin)
+        middle_row.addWidget(QLabel("Duration:"))
         self.duration_edit = QTimeEdit()
         self.duration_edit.setDisplayFormat("mm:ss")
         self.duration_edit.setTime(seconds_to_qtime(self._cues.duration_sec))
         self.duration_edit.timeChanged.connect(self._on_duration_changed)
-        controls.addWidget(self.duration_edit)
-
+        middle_row.addWidget(self.duration_edit)
         self.sync_dy_checkbox = QCheckBox("Sync DY Play/Stop")
         self.sync_dy_checkbox.setChecked(True)
         self.sync_dy_checkbox.setToolTip(
@@ -662,17 +674,22 @@ class StoryTimelinePanel(QWidget):
             "to that LilyGO only, and the physical buttons start or stop only this timeline."
         )
         self.sync_dy_checkbox.toggled.connect(self.sync_dy_toggled.emit)
-        controls.addWidget(self.sync_dy_checkbox)
+        middle_row.addWidget(self.sync_dy_checkbox)
+        controls.addWidget(middle, 1)
 
-        self.clear_button = _add_expanding_button(
-            controls, "Clear clips", self._on_clear_clips
+        clears, clears_row = _toolbar_section(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        self.clear_speed_button = _add_expanding_button(
-            controls,
+        self.clear_button = _toolbar_button("Clear clips", self._on_clear_clips)
+        self.clear_speed_button = _toolbar_button(
             "Clear speed",
             self._on_clear_speed,
             "Remove this station's speed breakpoints; waveform Speed box takes over",
         )
+        clears_row.addWidget(self.clear_button)
+        clears_row.addWidget(self.clear_speed_button)
+        controls.addWidget(clears, 1)
+
         layout.addLayout(controls)
 
         self.canvas = StoryTimelineCanvas(
