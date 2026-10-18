@@ -32,19 +32,32 @@ Install via **Library Manager**:
 | **TFT_eSPI** (Bodmer) | TTGO T-Display UI only |
 | **TFT_eWidget** (Bodmer) | TTGO T-Display graph only |
 
-For **TTGO T-Display**, configure TFT_eSPI once:
+For **TTGO T-Display**, configure TFT_eSPI once (pick one):
+
+**Option A — edit in place**
 
 1. Open `Documents/Arduino/libraries/TFT_eSPI/User_Setup_Select.h`
 2. Comment out `#include <User_Setup.h>`
 3. Uncomment `#include <User_Setups/Setup25_TTGO_T_Display.h>`
+
+**Option B — copy the project backup**
+
+After installing TFT_eSPI via Library Manager, overwrite that same file with the repo copy:
+
+`Interactive Object/lib/TFT_eSPI/User_Setup_Select.h` → `Documents/Arduino/libraries/TFT_eSPI/User_Setup_Select.h`
+
+That folder is only a **setup backup** (not the full library). Arduino IDE still needs the Library Manager install under `Documents/Arduino/libraries/`.
 
 ### 3. Board selection in the IDE
 
 **ESP32-S3-DevKitC-1** (default in `settings.h`):
 
 - **Tools → Board → ESP32 Arduino → ESP32S3 Dev Module** (or the matching S3 DevKit entry)
-- Use the **UART** USB port for Serial upload/streaming
-- Flash / USB CDC settings as needed for your module
+- For the **native USB** jack (COM device `VID_303A`):  
+  **Tools → USB CDC On Boot → Enabled** and **USB Mode → Hardware CDC and JTAG**  
+  Without CDC On Boot, `Serial` goes to the UART jack and the native USB monitor stays blank (LEDs can still work).
+- Alternative: leave CDC off and use the **UART** USB port for Serial Monitor / RDCC
+- After opening Serial Monitor, press **RESET** (or use Upload + Monitor) so boot text is not lost before the host connects
 
 **LilyGo TTGO T-Display**:
 

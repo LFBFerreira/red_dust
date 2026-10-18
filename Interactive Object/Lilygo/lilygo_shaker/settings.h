@@ -172,7 +172,7 @@ static const float TACTILE_MAX_LEVEL[MAX_PINS] = {1.0f, 1.0f, 1.0f, 1.0f, 0.3f, 
 // SERIAL
 // =============================================================================
 #define SERIAL_BAUDRATE 115200
-#define SERIAL_STATUS_DEBUG 0  // keep off: Serial is the live data link (TX spam can disturb RX)
+#define SERIAL_STATUS_DEBUG 1  // keep off: Serial is the live data link (TX spam can disturb RX)
 #define DISPLAY_BOOT_TEST 1
 
 // Debug Serial helpers: real prints when SERIAL_STATUS_DEBUG, else compile to no-ops.
