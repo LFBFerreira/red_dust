@@ -10,11 +10,13 @@ import numpy as np
 import pyqtgraph as pg
 from obspy import Stream, UTCDateTime
 from pyqtgraph import AxisItem
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from settings import MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL
+
+from ui.layout_helpers import panel_title
 
 from .channel_colors import FALLBACK_TRACE_COLOR, channel_color_map
 
@@ -86,6 +88,7 @@ class WaveformViewer(QWidget):
     """Widget for displaying multi-channel waveform data."""
 
     loop_range_selected = Signal(UTCDateTime, UTCDateTime)
+    fullscreen_requested = Signal()
 
     def __init__(self, parent=None, *, title: str = "Waveform", interactive: bool = True):
         super().__init__(parent)
@@ -113,8 +116,7 @@ class WaveformViewer(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self._title_label = QLabel(f"<b>{self._title_text}</b>")
-        self._title_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self._title_label = panel_title(f"<b>{self._title_text}</b>")
         layout.addWidget(self._title_label)
 
         self.plot_widget = pg.PlotWidget()
@@ -142,9 +144,11 @@ class WaveformViewer(QWidget):
         if self._interactive:
             self.plot_widget.scene().sigMouseClicked.connect(self._on_mouse_click)
             self.plot_widget.scene().sigMouseMoved.connect(self._on_mouse_move)
+            self.plot_widget.viewport().installEventFilter(self)
 
         self._drag_start = None
         self._is_dragging = False
+        self._ignore_next_plot_click = False
 
         layout.addWidget(self.plot_widget, 1)
         self.setLayout(layout)
@@ -543,8 +547,30 @@ class WaveformViewer(QWidget):
         else:
             self.clear_loop_markers()
 
+    def _clear_loop_drag(self) -> None:
+        self._is_dragging = False
+        self._drag_start = None
+
+    def eventFilter(self, watched, event) -> bool:
+        # The scene click signal reports the first press, not the double-click.
+        if (
+            self._interactive
+            and watched is self.plot_widget.viewport()
+            and event.type() == QEvent.Type.MouseButtonDblClick
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            self._clear_loop_drag()
+            self._ignore_next_plot_click = True
+            self.fullscreen_requested.emit()
+            return True
+        return super().eventFilter(watched, event)
+
     def _on_mouse_click(self, event):
         if not self._interactive:
+            return
+        if self._ignore_next_plot_click:
+            self._ignore_next_plot_click = False
+            self._clear_loop_drag()
             return
         if event.button() == Qt.MouseButton.LeftButton:
             pos = self.plot_widget.plotItem.vb.mapSceneToView(event.scenePos())
@@ -570,6 +596,5 @@ class WaveformViewer(QWidget):
                 if start_time > end_time:
                     start_time, end_time = end_time, start_time
                 self.loop_range_selected.emit(start_time, end_time)
-            self._is_dragging = False
-            self._drag_start = None
+            self._clear_loop_drag()
         super().mouseReleaseEvent(event)

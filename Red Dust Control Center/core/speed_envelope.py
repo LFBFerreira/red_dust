@@ -27,6 +27,11 @@ def clamp_speed(speed: float) -> float:
     return max(STORY_SPEED_MIN, min(STORY_SPEED_MAX, float(speed)))
 
 
+def _story_speed(speed: float) -> float:
+    """Clamp and round to one decimal so spin-box edits stay on the same grid."""
+    return clamp_speed(round(float(speed), 1))
+
+
 class SpeedEnvelope(QObject):
     """Linear breakpoints: empty envelope leaves the manual Speed control alone."""
 
@@ -62,7 +67,7 @@ class SpeedEnvelope(QObject):
         pts = self.sorted_points()
         if not pts:
             return STORY_SPEED_DEFAULT
-        t = max(0.0, min(float(time_sec), self._duration_sec))
+        t = self._clamp_time(time_sec)
         if t <= pts[0].time_sec:
             return pts[0].speed
         if t >= pts[-1].time_sec:
@@ -80,18 +85,20 @@ class SpeedEnvelope(QObject):
 
     def set_duration(self, duration_sec: float) -> None:
         self._duration_sec = max(1.0, float(duration_sec))
-        kept: List[SpeedPoint] = []
-        for point in self._points:
-            t = max(0.0, min(point.time_sec, self._duration_sec))
-            kept.append(SpeedPoint(point.point_id, t, clamp_speed(point.speed)))
-        self._points = kept
+        self._points = [
+            SpeedPoint(point.point_id, self._clamp_time(point.time_sec), clamp_speed(point.speed))
+            for point in self._points
+        ]
         self.changed.emit()
+
+    def _clamp_time(self, time_sec: float) -> float:
+        return max(0.0, min(float(time_sec), self._duration_sec))
 
     def add_point(self, time_sec: float, speed: float) -> SpeedPoint:
         point = SpeedPoint(
             str(uuid.uuid4()),
-            max(0.0, min(float(time_sec), self._duration_sec)),
-            clamp_speed(round(float(speed), 1)),
+            self._clamp_time(time_sec),
+            _story_speed(speed),
         )
         self._points.append(point)
         self.changed.emit()
@@ -105,8 +112,8 @@ class SpeedEnvelope(QObject):
             return None
         updated = SpeedPoint(
             point_id,
-            max(0.0, min(float(time_sec), self._duration_sec)),
-            clamp_speed(round(float(speed), 1)),
+            self._clamp_time(time_sec),
+            _story_speed(speed),
         )
         self._points = [updated if p.point_id == point_id else p for p in self._points]
         self.changed.emit()
@@ -119,6 +126,32 @@ class SpeedEnvelope(QObject):
             return False
         self.changed.emit()
         return True
+
+    def set_speed_near(
+        self, time_sec: float, speed: float, point_id: Optional[str] = None
+    ) -> str:
+        """Set playback speed at ``time_sec`` using one breakpoint.
+
+        Reuses ``point_id`` when the user is still editing, so a spin box
+        drag does not leave a trail of points. A single point holds that
+        speed for the whole story.
+        """
+        t = self._clamp_time(time_sec)
+        speed = _story_speed(speed)
+        if point_id and self.point_by_id(point_id) is not None:
+            self.update_point(point_id, t, speed)
+            return point_id
+        nearest: Optional[SpeedPoint] = None
+        nearest_dt = 0.35
+        for point in self._points:
+            dt = abs(point.time_sec - t)
+            if dt <= nearest_dt:
+                nearest = point
+                nearest_dt = dt
+        if nearest is not None:
+            self.update_point(nearest.point_id, nearest.time_sec, speed)
+            return nearest.point_id
+        return self.add_point(t, speed).point_id
 
     def clear(self) -> None:
         if not self._points:

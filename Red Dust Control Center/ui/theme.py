@@ -96,8 +96,8 @@ def _refresh_theme_sensitive_widgets(app: QApplication) -> None:
     """Widgets whose QSS must be reapplied after global palette / style changes."""
     for top in app.topLevelWidgets():
         oc = getattr(top, "object_cards", None)
-        if oc is not None and hasattr(oc, "_refresh_interactive_objects_tab_style"):
-            oc._refresh_interactive_objects_tab_style()
+        if oc is not None and hasattr(oc, "_refresh_object_card_style"):
+            oc._refresh_object_card_style()
         pc = getattr(top, "playback_controls", None)
         if pc is not None and hasattr(pc, "_refresh_channel_strip_theme"):
             pc._refresh_channel_strip_theme()

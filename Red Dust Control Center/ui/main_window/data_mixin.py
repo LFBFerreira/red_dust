@@ -2,6 +2,7 @@
 
 import logging
 import time
+from typing import Any
 
 from settings import DEFAULT_NETWORK, DEFAULT_STATION
 from .base import _MainWindowBase
@@ -13,6 +14,20 @@ from .constants import (
 from .threads import DataLoadThread, MetadataLoadThread
 
 logger = logging.getLogger(__name__)
+
+
+def _format_dataset_utc(when: Any) -> str:
+    """Readable UTC stamp for exhibition metadata (no ISO T/Z or microseconds)."""
+    try:
+        return when.strftime("%d %b %Y, %H:%M:%S UTC")
+    except Exception:
+        return str(when)
+
+
+def _format_duration_hours(hours: float) -> str:
+    if abs(hours - round(hours)) < 1e-6:
+        return f"{int(round(hours))} hours"
+    return f"{hours:.2f} hours"
 
 
 class MainWindowDataMixin(_MainWindowBase):
@@ -274,9 +289,8 @@ Duration: {duration_h:.2f} hours"""
         time_range = self.waveform_model.get_time_range()
         if time_range:
             t0, t1 = time_range[0], time_range[1]
-            duration_h = float(t1 - t0) / 3600.0
-            time_range_line = f"{t0} to {t1}"
-            duration_line = f"{duration_h:.2f} hours"
+            time_range_line = f"{_format_dataset_utc(t0)} – {_format_dataset_utc(t1)}"
+            duration_line = _format_duration_hours(float(t1 - t0) / 3600.0)
         win.set_dataset_fields(
             network=str(trace.stats.network),
             station=str(trace.stats.station),

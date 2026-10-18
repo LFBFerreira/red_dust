@@ -7,7 +7,6 @@ import logging
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
-    QLabel,
     QMainWindow,
     QSizePolicy,
     QSplitter,
@@ -30,7 +29,7 @@ from settings import (
     STATIONS_PANEL_WIDTH,
     WIDGET_PANEL_MARGIN,
 )
-from ui.layout_helpers import wrap_panel
+from ui.layout_helpers import flush_vbox, panel_title, set_vertical_policy, wrap_panel
 from ui.view_prefs import (
     default_window_size,
     read_show_log,
@@ -173,18 +172,13 @@ class MainWindow(
 
         left_column = QWidget()
         left_column.setMinimumWidth(LEFT_PANEL_WIDTH)
-        left_column_layout = QVBoxLayout(left_column)
-        left_column_layout.setContentsMargins(0, 0, 0, 0)
-        left_column_layout.setSpacing(0)
+        left_column_layout = flush_vbox(left_column)
 
         self.metadata_widget = QWidget()
         metadata_layout = QVBoxLayout()
         metadata_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.dataset_label = QLabel(DATASET_LABEL_TITLE_HTML)
-        self.dataset_label.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
-        )
+        self.dataset_label = panel_title(DATASET_LABEL_TITLE_HTML)
         metadata_layout.addWidget(self.dataset_label)
 
         self.metadata_text = QTextEdit()
@@ -192,33 +186,28 @@ class MainWindow(
         self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
         metadata_layout.addWidget(self.metadata_text, 1)
         self.metadata_widget.setLayout(metadata_layout)
-        metadata_sp = self.metadata_widget.sizePolicy()
-        metadata_sp.setVerticalPolicy(QSizePolicy.Policy.Expanding)
-        self.metadata_widget.setSizePolicy(metadata_sp)
+        set_vertical_policy(self.metadata_widget, QSizePolicy.Policy.Expanding)
         left_column_layout.addWidget(wrap_panel(self.metadata_widget), 1)
 
         self.data_picker = DataPicker(data_manager=self.data_manager)
-        picker_sp = self.data_picker.sizePolicy()
-        picker_sp.setVerticalPolicy(QSizePolicy.Policy.Fixed)
-        self.data_picker.setSizePolicy(picker_sp)
+        set_vertical_policy(self.data_picker, QSizePolicy.Policy.Fixed)
         left_column_layout.addWidget(wrap_panel(self.data_picker), 0)
 
         waveform_column = QWidget()
-        waveform_column_layout = QVBoxLayout(waveform_column)
-        waveform_column_layout.setContentsMargins(0, 0, 0, 0)
-        waveform_column_layout.setSpacing(0)
+        waveform_column_layout = flush_vbox(waveform_column)
 
+        # One outer wrap around plot + transport so the gap between them is a
+        # single panel margin, not the stacked bottoms/tops of two wraps.
+        waveform_stack = QWidget()
+        waveform_stack_layout = flush_vbox(waveform_stack)
+        waveform_stack_layout.setSpacing(WIDGET_PANEL_MARGIN)
         self.waveform_viewer = WaveformViewer()
-        waveform_sp = self.waveform_viewer.sizePolicy()
-        waveform_sp.setVerticalPolicy(QSizePolicy.Policy.Expanding)
-        self.waveform_viewer.setSizePolicy(waveform_sp)
-        waveform_column_layout.addWidget(wrap_panel(self.waveform_viewer), 1)
-
+        set_vertical_policy(self.waveform_viewer, QSizePolicy.Policy.Expanding)
+        waveform_stack_layout.addWidget(self.waveform_viewer, 1)
         self.playback_controls = PlaybackControls()
-        playback_sp = self.playback_controls.sizePolicy()
-        playback_sp.setVerticalPolicy(QSizePolicy.Policy.Fixed)
-        self.playback_controls.setSizePolicy(playback_sp)
-        waveform_column_layout.addWidget(wrap_panel(self.playback_controls), 0)
+        set_vertical_policy(self.playback_controls, QSizePolicy.Policy.Fixed)
+        waveform_stack_layout.addWidget(self.playback_controls, 0)
+        waveform_column_layout.addWidget(wrap_panel(waveform_stack), 1)
 
         self._top_column_splitter.addWidget(left_column)
         self._top_column_splitter.addWidget(waveform_column)
@@ -239,9 +228,7 @@ class MainWindow(
         log_layout = QVBoxLayout()
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_layout.setSpacing(WIDGET_PANEL_MARGIN // 2)
-        log_title = QLabel("<b>Log</b>")
-        log_title.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        log_layout.addWidget(log_title)
+        log_layout.addWidget(panel_title("<b>Log</b>"))
         self.log_viewer = LogViewer()
         log_layout.addWidget(self.log_viewer, 1)
         self.log_section.setLayout(log_layout)
@@ -388,7 +375,7 @@ class MainWindow(
     def _connect_signals(self):
         """Connect signals and slots."""
         self.data_picker.load_requested.connect(self._on_load_requested)
-        self.data_picker.fullscreen_requested.connect(self._on_fullscreen_requested)
+        self.waveform_viewer.fullscreen_requested.connect(self._open_fullscreen_preview)
 
         self.playback_controls.play_clicked.connect(self._on_play_requested)
         self.playback_controls.pause_clicked.connect(self.playback_controller.pause)
@@ -440,12 +427,19 @@ class MainWindow(
 
         self.playback_controller.state_changed.connect(self._on_playback_state_changed)
 
-    def _on_fullscreen_requested(self) -> None:
-        """Open or close the full-screen dataset + loop waveform window."""
+    def _fullscreen_preview_visible(self) -> bool:
         win = self._fullscreen_window
-        if win is not None and win.isVisible():
-            win.close()
-            return
+        return win is not None and win.isVisible()
+
+    def _on_fullscreen_menu_toggled(self, checked: bool) -> None:
+        if checked:
+            self._open_fullscreen_preview()
+        else:
+            self._close_fullscreen_preview()
+
+    def _open_fullscreen_preview(self) -> None:
+        """Show the full-screen dataset and loop-region waveform."""
+        win = self._fullscreen_window
         if win is None:
             win = FullscreenPreviewWindow(self)
             win.destroyed.connect(self._on_fullscreen_window_destroyed)
@@ -454,9 +448,24 @@ class MainWindow(
         win.showFullScreen()
         win.raise_()
         win.activateWindow()
+        self._sync_fullscreen_menu()
+
+    def _close_fullscreen_preview(self) -> None:
+        if self._fullscreen_preview_visible():
+            self._fullscreen_window.close()
+        self._sync_fullscreen_menu()
+
+    def _sync_fullscreen_menu(self) -> None:
+        action = getattr(self, "_fullscreen_action", None)
+        if action is None:
+            return
+        action.blockSignals(True)
+        action.setChecked(self._fullscreen_preview_visible())
+        action.blockSignals(False)
 
     def _on_fullscreen_window_destroyed(self, *_args) -> None:
         self._fullscreen_window = None
+        self._sync_fullscreen_menu()
 
     def _sync_fullscreen_preview(self) -> None:
         """Push dataset info and the live 10 min paging waveform into the full-screen window."""
@@ -464,10 +473,11 @@ class MainWindow(
         if win is None:
             return
         self._sync_fullscreen_metadata()
-        loop_range = self.playback_controls.get_loop_range_from_inputs()
-        if loop_range is None:
-            loop_range = self.playback_controller.get_loop_range()
-        time_span = loop_range or self.waveform_model.get_time_range()
+        time_span = (
+            self.playback_controls.get_loop_range_from_inputs()
+            or self.playback_controller.get_loop_range()
+            or self.waveform_model.get_time_range()
+        )
         win.set_live_source(
             self.waveform_model.get_stream(),
             self.waveform_model.get_selected_channels(),

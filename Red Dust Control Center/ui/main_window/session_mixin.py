@@ -74,6 +74,14 @@ class MainWindowSessionMixin(_MainWindowBase):
         self._sync_theme_menu_checks()
 
         view_menu = menubar.addMenu("View")
+        self._fullscreen_action = QAction("Full Screen", self)
+        self._fullscreen_action.setCheckable(True)
+        self._fullscreen_action.setStatusTip(
+            "Open a full-screen view of dataset information and the loop-region waveform"
+        )
+        self._fullscreen_action.triggered.connect(self._on_fullscreen_menu_toggled)
+        view_menu.addAction(self._fullscreen_action)
+
         self._view_log_action = QAction("View Log", self)
         self._view_log_action.setCheckable(True)
         self._view_log_action.setChecked(read_show_log())
