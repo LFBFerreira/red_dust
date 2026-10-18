@@ -12,31 +12,31 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug",
-            "executable": "c:/Users/luisf/Documents/GitHub/red_dust/Interactive Object/Lilygo/lilygo_shaker/.pio/build/esp32-s3-devkitc-1/firmware.elf",
-            "projectEnvName": "esp32-s3-devkitc-1",
-            "toolchainBinDir": "C:/Users/luisf/.platformio/packages/toolchain-xtensa-esp32s3/bin",
+            "executable": "c:/Users/luisf/Documents/GitHub/red_dust/Interactive Object/Lilygo/lilygo_shaker/.pio/build/ttgo-t-display/firmware.elf",
+            "projectEnvName": "ttgo-t-display",
+            "toolchainBinDir": "C:/Users/luisf/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "preLaunchTask": {
                 "type": "PlatformIO",
-                "task": "Pre-Debug (esp32-s3-devkitc-1)"
+                "task": "Pre-Debug (ttgo-t-display)"
             }
         },
         {
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (skip Pre-Debug)",
-            "executable": "c:/Users/luisf/Documents/GitHub/red_dust/Interactive Object/Lilygo/lilygo_shaker/.pio/build/esp32-s3-devkitc-1/firmware.elf",
-            "projectEnvName": "esp32-s3-devkitc-1",
-            "toolchainBinDir": "C:/Users/luisf/.platformio/packages/toolchain-xtensa-esp32s3/bin",
+            "executable": "c:/Users/luisf/Documents/GitHub/red_dust/Interactive Object/Lilygo/lilygo_shaker/.pio/build/ttgo-t-display/firmware.elf",
+            "projectEnvName": "ttgo-t-display",
+            "toolchainBinDir": "C:/Users/luisf/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart"
         },
         {
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (without uploading)",
-            "executable": "c:/Users/luisf/Documents/GitHub/red_dust/Interactive Object/Lilygo/lilygo_shaker/.pio/build/esp32-s3-devkitc-1/firmware.elf",
-            "projectEnvName": "esp32-s3-devkitc-1",
-            "toolchainBinDir": "C:/Users/luisf/.platformio/packages/toolchain-xtensa-esp32s3/bin",
+            "executable": "c:/Users/luisf/Documents/GitHub/red_dust/Interactive Object/Lilygo/lilygo_shaker/.pio/build/ttgo-t-display/firmware.elf",
+            "projectEnvName": "ttgo-t-display",
+            "toolchainBinDir": "C:/Users/luisf/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "loadMode": "manual"
         }

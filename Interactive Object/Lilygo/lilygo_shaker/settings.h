@@ -11,8 +11,10 @@
 // OSC 0..1 maps to shake carrier frequency: 0 -> MIN Hz, 1 -> MAX Hz (per L/R channel).
 #define I2S_CARRIER_HZ_MIN 25.0f
 #define I2S_CARRIER_HZ_MAX 50.0f
+
 // How fast L/R levels ease toward new OSC values (0..1). Higher = snappier; lower = smoother.
 #define I2S_AMP_SMOOTHING 0.92f
+
 // Exact 0 = silent. Any OSC > 0 remaps into [FLOOR, 1] so weak quakes still shake.
 #define SHAKE_LEVEL_FLOOR 0.2f
 
@@ -21,8 +23,10 @@
 // =============================================================================
 #define OSC_PATH "/red_dust/osc_object_1"
 #define OSC_PORT 8000
+
 // No Serial/OSC packet for this long -> treat stream as idle and mute (avoids pops on brief drops).
 #define STREAM_IDLE_TIMEOUT_MS 3000
+
 // Clear a partial Serial line if no new characters arrive for this long.
 #define SERIAL_TIMEOUT_MS 1000
 
@@ -94,8 +98,10 @@ static const float TACTILE_MAX_LEVEL[MAX_PINS] = {1.0f, 1.0f, 1.0f, 1.0f, 0.3f, 
 // =============================================================================
 // PCM audio rate sent to the DAC (Hz). Leave at 44100 unless changing the I2S driver.
 #define I2S_SAMPLE_RATE 44100
+
 // Extra amplitude multiplier after OSC level (1.0 = unity; >1 louder, may clip near peaks).
 #define I2S_VOLUME_GAIN 1.0f
+
 // I2S DMA buffer count and samples-per-buffer (latency vs CPU). Leave unless underruns.
 #define I2S_DMA_BUF_COUNT 8
 #define I2S_DMA_BUF_LEN 256
