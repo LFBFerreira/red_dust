@@ -2,7 +2,7 @@
 
 ESP32 firmware for a **Red Dust interactive object**: it receives normalized quake levels (**Pin_A … Pin_F**, 0..1) from **Red Dust Control Center (RDCC)** over **USB Serial** and/or **OSC (UDP)**, and drives tactile shakers. RDCC loads InSight SEIS waveforms, maps channels to pins, and streams at ~60 Hz; this sketch is the device side of that link.
 
-Two hardware output paths (chosen in `settings.h`):
+Two hardware output paths (chosen in `board_select.h`):
 
 | Path | What it drives |
 |------|----------------|
@@ -50,7 +50,7 @@ That folder is only a **setup backup** (not the full library). Arduino IDE still
 
 ### 3. Board selection in the IDE
 
-**ESP32-S3-DevKitC-1** (default in `settings.h`):
+**ESP32-S3-DevKitC-1** (default in `board_select.h`):
 
 - **Tools → Board → ESP32 Arduino → ESP32S3 Dev Module** (or the matching S3 DevKit entry)
 - For the **native USB** jack (COM device `VID_303A`):  
@@ -62,22 +62,22 @@ That folder is only a **setup backup** (not the full library). Arduino IDE still
 **LilyGo TTGO T-Display**:
 
 - **Tools → Board → ESP32 Arduino → LilyGo T-Display** (or ESP32 Dev Module)
-- Set `ACTIVE_BOARD` to `BOARD_TTGO_T_DISPLAY` in `settings.h` before upload
+- Set `ACTIVE_BOARD` to `BOARD_TTGO_T_DISPLAY` in `board_select.h` before upload
 
 ### 4. Configure, compile, upload
 
 1. Open `lilygo_shaker.ino`
-2. Edit `settings.h` (board, output path, feel — see below)
+2. Edit `board_select.h` (board, output path, GPIOs) and `settings.h` (feel — see below)
 3. **Verify**, then **Upload**
 4. On first boot with WiFi, connect to AP **`Red_Dust_Object`** if needed and join your network (WiFiManager). OSC needs WiFi; Serial does not.
 
 ---
 
-## Configuration (`settings.h`)
+## Configuration
 
-Primary knobs are at the top of the file. Recompile after changes.
+Recompile after changes. Board, signal path, and output GPIOs are in `board_select.h`. Feel, OSC, and serial stay in `settings.h`.
 
-### Board and output path
+### Board and output path (`board_select.h`)
 
 ```cpp
 #define ACTIVE_BOARD BOARD_ESP32_S3_DEVKITC_1   // or BOARD_TTGO_T_DISPLAY
@@ -101,7 +101,7 @@ Exact **0** stays silent.
 | `PWM_TACTILE_CARRIER_HZ` | Haptic carrier under the envelope |
 | `PWM_TACTILE_DRIVE` | Strength at OSC=1.0 (fidelity vs coil slap) |
 | `PWM_TACTILE_SMOOTH_MS` | Tiny envelope smooth (click kill only) |
-| `PWM_TACTILE_PINS[]` | GPIO per Pin_A…F (board-dependent) |
+| `PWM_TACTILE_PINS[]` | GPIO per Pin_A…F (`board_select.h`, board-dependent) |
 
 ### OSC addressing
 
@@ -114,7 +114,7 @@ Exact **0** stays silent.
 
 Baud rate: `SERIAL_BAUDRATE` (default **115200**) — must match the Serial object in RDCC.
 
-Pin maps, I2S pins, PWM timer settings, and similar live in the **SUPPORT / HARDWARE** section; leave those unless you change wiring.
+PWM and I2S GPIOs are in `board_select.h`. PWM timer settings and similar live in the **SUPPORT / HARDWARE** section of `settings.h`. Leave those unless you change wiring.
 
 ### Quick wiring reference (PCM5102)
 
@@ -172,7 +172,8 @@ Serial and OSC can both be active; either keeps the stream “live.” After `ST
 | File | Role |
 |------|------|
 | `lilygo_shaker.ino` | Setup / loop, shared outputs & WiFi |
-| `settings.h` | Board, path, feel, OSC/Serial config |
+| `board_select.h` | Board, signal path, and output GPIOs |
+| `settings.h` | Feel, pins, OSC/Serial config |
 | `input.*` | Serial + OSC ingest |
 | `ui.*` | TTGO TFT graph / DevKitC status LED |
 | `helpers.*` | Parsing and small utilities |
