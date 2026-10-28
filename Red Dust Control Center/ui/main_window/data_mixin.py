@@ -2,6 +2,7 @@
 
 import logging
 import time
+from typing import Any
 
 from settings import DEFAULT_NETWORK, DEFAULT_STATION
 from .base import _MainWindowBase
@@ -13,6 +14,20 @@ from .constants import (
 from .threads import DataLoadThread, MetadataLoadThread
 
 logger = logging.getLogger(__name__)
+
+
+def _format_dataset_utc(when: Any) -> str:
+    """Readable UTC stamp for exhibition metadata (no ISO T/Z or microseconds)."""
+    try:
+        return when.strftime("%d %b %Y, %H:%M:%S UTC")
+    except Exception:
+        return str(when)
+
+
+def _format_duration_hours(hours: float) -> str:
+    if abs(hours - round(hours)) < 1e-6:
+        return f"{int(round(hours))} hours"
+    return f"{hours:.2f} hours"
 
 
 class MainWindowDataMixin(_MainWindowBase):
@@ -80,6 +95,7 @@ class MainWindowDataMixin(_MainWindowBase):
             logger.debug("Stopping OSC streaming...")
 
         logger.info("State reset complete")
+        self._sync_fullscreen_preview()
 
     def _on_load_requested(self, selection: dict):
         """Handle data load request."""
@@ -203,6 +219,7 @@ class MainWindowDataMixin(_MainWindowBase):
         logger.info(
             "===== Data loaded callback complete in %.2fs =====", process_time
         )
+        self._sync_fullscreen_preview()
 
     def _on_load_error(self, error_message: str):
         """Handle data load error."""
@@ -218,11 +235,13 @@ class MainWindowDataMixin(_MainWindowBase):
 
         if not self.waveform_model.get_stream():
             self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
+            self._sync_fullscreen_metadata()
             return
 
         stream = self.waveform_model.get_stream()
         if stream is None or len(stream) == 0:
             self.metadata_text.setPlainText(DATASET_METADATA_EMPTY_MESSAGE)
+            self._sync_fullscreen_metadata()
             return
 
         trace = stream[0]
@@ -249,6 +268,36 @@ Time Range: {t0} to {t1}
 Duration: {duration_h:.2f} hours"""
 
         self.metadata_text.setText(metadata)
+        self._sync_fullscreen_metadata()
+
+    def _sync_fullscreen_metadata(self) -> None:
+        win = getattr(self, "_fullscreen_window", None)
+        if win is None:
+            return
+        if not self.waveform_model.get_stream():
+            win.set_dataset_fields(empty_message=DATASET_METADATA_EMPTY_MESSAGE)
+            return
+        stream = self.waveform_model.get_stream()
+        if stream is None or len(stream) == 0:
+            win.set_dataset_fields(empty_message=DATASET_METADATA_EMPTY_MESSAGE)
+            return
+        trace = stream[0]
+        selected = self.waveform_model.get_selected_channels()
+        selected_line = ", ".join(selected) if selected else "—"
+        time_range_line = None
+        duration_line = None
+        time_range = self.waveform_model.get_time_range()
+        if time_range:
+            t0, t1 = time_range[0], time_range[1]
+            time_range_line = f"{_format_dataset_utc(t0)} – {_format_dataset_utc(t1)}"
+            duration_line = _format_duration_hours(float(t1 - t0) / 3600.0)
+        win.set_dataset_fields(
+            network=str(trace.stats.network),
+            station=str(trace.stats.station),
+            selected_channels=selected_line,
+            time_range=time_range_line,
+            duration=duration_line,
+        )
 
     def _load_metadata_async(self):
         """Load metadata (available years/days) in background."""

@@ -24,10 +24,13 @@ AVAILABLE_STATIONS = ["ELYSE", "ELYS0", "ELYHK", "ELYH0"]
 
 # Max simultaneous waveform channel selections (must be <= len(CHANNEL_TRACE_COLORS)
 # in ui/widgets/channel_colors.py; extra palette colors are unused until you raise this).
-MAX_SELECTED_CHANNELS = 6
+MAX_SELECTED_CHANNELS = 10
 
 # Cap points sent to pyqtgraph per channel (display only; stream / cache stay full rate).
 MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL = 8000
+
+# Full-screen live strip: one paging window of seismic time, LilyGO-style.
+FULLSCREEN_WAVEFORM_WINDOW_SEC = 10.0 * 60.0  # 10 minutes
 
 
 # --- UI ---
@@ -41,22 +44,26 @@ SHOW_LOG = False
 SHOW_WIDGET_DEBUG_BORDERS = False
 
 # Main window layout.
-LEFT_PANEL_WIDTH = 250  # Left column in top half (Dataset Information, Data Picker)
-DEFAULT_WINDOW_WIDTH = 1100
+LEFT_PANEL_WIDTH = 250  # Dataset Information / Data Picker column
+STATIONS_PANEL_WIDTH = 720  # Initial width of the Dust Devil timeline column
+OBJECT_CARDS_MIN_WIDTH = 280  # Narrowest the Interactive Objects column can be
+DEFAULT_WINDOW_WIDTH = 1680
 DEFAULT_WINDOW_HEIGHT = 800
 WIDGET_PANEL_MARGIN = 12  # Empty space around each major UI panel (pixels)
 
 # Interactive object cards.
-TAB_ICON_SIZE = 20  # Streaming status icon in object tabs (pixels)
-OBJECT_CARD_LEFT_PANEL_MAX_WIDTH = 300  # OSC/Serial name & connection column (pixels)
+TAB_ICON_SIZE = 20  # Streaming status dot on each object card (pixels)
 OSC_OBJECT_ENDPOINT_DEBOUNCE_MS = 500  # Apply OSC host/address after typing pauses (avoids DNS per key)
 
 
 # --- Streaming / I/O (firmware & protocol contract) ---
 
 # Multi-pin wire format: index 0 = first float in OSC/Serial frame (Pin_A), etc.
-MAX_PIN_SLOTS = 6
-PIN_SLOT_LABELS = ("Pin_A", "Pin_B", "Pin_C", "Pin_D", "Pin_E", "Pin_F")
+MAX_PIN_SLOTS = 10
+PIN_SLOT_LABELS = (
+    "Pin_A", "Pin_B", "Pin_C", "Pin_D", "Pin_E",
+    "Pin_F", "Pin_G", "Pin_H", "Pin_I", "Pin_J",
+)
 # Slots with no mapped channel send this float; firmware treats values outside [0, 1] as inactive.
 WIRE_INACTIVE_PIN_SENTINEL = -1.0
 
@@ -69,3 +76,17 @@ OSC_OUTPUT_INTERVAL_MS = 1000 // OSC_OUTPUT_RATE  # ~16.67 ms
 SERIAL_BAUDRATE = 115200
 SERIAL_OUTPUT_RATE = 60  # Hz
 SERIAL_OUTPUT_INTERVAL_MS = 1000 // SERIAL_OUTPUT_RATE  # ~16.67 ms
+
+
+# --- Dust Devil story timeline (pin on/off cues) ---
+
+# First N wire slots (Pin_A ..) that the story timeline can gate.
+STORY_PIN_COUNT = 6
+# Default story length: 14 minutes 30 seconds.
+STORY_DURATION_SEC = 14 * 60 + 30
+# Shortest clip that can be drawn on a lane.
+STORY_MIN_CLIP_SEC = 0.25
+# Waveform playback-speed envelope drawn on the Dust Devil timeline.
+STORY_SPEED_MIN = 1.0
+STORY_SPEED_MAX = 100.0
+STORY_SPEED_DEFAULT = 1.0

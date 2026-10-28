@@ -117,12 +117,13 @@ class PlaybackController(QObject):
         self.playhead_updated.emit(self._current_time)
         logger.info("Playback stopped")
     
-    def set_speed(self, multiplier: float) -> None:
+    def set_speed(self, multiplier: float, *, log: bool = True) -> None:
         """
         Set playback speed multiplier.
-        
+
         Args:
             multiplier: Speed multiplier (0.1 to 1000.0)
+            log: If False, skip the info log (used by the story-speed envelope).
         """
         multiplier = max(0.1, min(1000.0, multiplier))
         
@@ -150,7 +151,8 @@ class PlaybackController(QObject):
         else:
             self._speed = multiplier
         
-        logger.info(f"Playback speed set to {multiplier}x")
+        if log:
+            logger.info(f"Playback speed set to {multiplier}x")
     
     def get_speed(self) -> float:
         """Get current playback speed."""

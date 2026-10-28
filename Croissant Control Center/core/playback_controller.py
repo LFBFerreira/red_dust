@@ -1,0 +1,355 @@
+"""
+Playback Controller for time-based waveform playback.
+"""
+from obspy import UTCDateTime
+from typing import Optional, Tuple
+from PySide6.QtCore import QObject, QTimer, Signal
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Minimum loop length in seconds
+MIN_LOOP_LENGTH = 2.0
+
+
+class PlaybackController(QObject):
+    """Manages time-based playback of waveform data."""
+    
+    # Signals
+    playhead_updated = Signal(UTCDateTime)  # Emitted when playhead position changes
+    state_changed = Signal(str)  # Emitted when playback state changes ("stopped", "playing", "paused")
+    
+    def __init__(self, waveform_model=None):
+        """
+        Initialize PlaybackController.
+        
+        Args:
+            waveform_model: WaveformModel instance (can be set later)
+        """
+        super().__init__()
+        self._waveform_model = waveform_model
+        self._state = "stopped"  # "stopped", "playing", "paused"
+        self._speed = 1.0
+        self._current_time = None
+        self._loop_enabled = False
+        self._loop_start = None
+        self._loop_end = None
+        
+        # Timer for playhead updates (60 Hz for smooth UI)
+        self._timer = QTimer()
+        self._timer.timeout.connect(self._update_playhead)
+        self._timer.setInterval(16)  # ~60 Hz
+        
+        # Track when playback started (for speed calculation)
+        self._playback_start_time = None
+        self._playback_start_position = None
+    
+    def set_waveform_model(self, waveform_model) -> None:
+        """
+        Set waveform model.
+        
+        Args:
+            waveform_model: WaveformModel instance
+        """
+        self._waveform_model = waveform_model
+        if waveform_model:
+            time_range = waveform_model.get_time_range()
+            if time_range:
+                self._current_time = time_range[0]
+    
+    def start(self) -> None:
+        """Start or resume playback."""
+        if self._waveform_model is None:
+            logger.warning("Cannot start playback: no waveform model set")
+            return
+        
+        time_range = self._waveform_model.get_time_range()
+        if not time_range:
+            logger.warning("Cannot start playback: no time range available")
+            return
+        
+        start_time, end_time = time_range
+        
+        # Initialize current time if not set
+        if self._current_time is None:
+            if self._loop_enabled and self._loop_start:
+                self._current_time = self._loop_start
+            else:
+                self._current_time = start_time
+
+        if self._loop_enabled:
+            self._snap_playhead_to_loop_if_needed(emit=True)
+        
+        # Record playback start for speed calculation
+        from time import time as current_time
+        self._playback_start_time = current_time()
+        self._playback_start_position = self._current_time
+        
+        self._state = "playing"
+        self._timer.start()
+        self.state_changed.emit(self._state)
+        logger.info(f"Playback started at {self._current_time}")
+    
+    def pause(self) -> None:
+        """Pause playback."""
+        if self._state == "playing":
+            self._timer.stop()
+            self._state = "paused"
+            self.state_changed.emit(self._state)
+            logger.info("Playback paused")
+    
+    def stop(self) -> None:
+        """Stop playback and reset to start."""
+        self._timer.stop()
+        
+        if self._waveform_model:
+            time_range = self._waveform_model.get_time_range()
+            if time_range:
+                if self._loop_enabled and self._loop_start:
+                    self._current_time = self._loop_start
+                else:
+                    self._current_time = time_range[0]
+        
+        self._state = "stopped"
+        self._playback_start_time = None
+        self._playback_start_position = None
+        self.state_changed.emit(self._state)
+        self.playhead_updated.emit(self._current_time)
+        logger.info("Playback stopped")
+    
+    def set_speed(self, multiplier: float, *, log: bool = True) -> None:
+        """
+        Set playback speed multiplier.
+        
+        Args:
+            multiplier: Speed multiplier (0.1 to 1000.0)
+            log: If False, skip the info log (used by the story-speed envelope).
+        """
+        multiplier = max(0.1, min(1000.0, multiplier))
+        
+        # If currently playing, adjust start position to maintain continuity
+        # This ensures playback continues from current position without restarting
+        if self._state == "playing" and self._playback_start_time is not None and self._current_time is not None:
+            from time import time as current_time
+            
+            # Ensure current_time is within valid range before updating
+            if self._waveform_model:
+                time_range = self._waveform_model.get_time_range()
+                if time_range:
+                    start_time, end_time = time_range
+                    # Clamp current_time to valid range
+                    if self._current_time < start_time:
+                        self._current_time = start_time
+                    elif self._current_time > end_time:
+                        self._current_time = end_time
+            
+            # Update the start position to current position and reset the timer
+            # This way playback continues from where it is, just at a different speed
+            self._playback_start_position = self._current_time
+            self._playback_start_time = current_time()
+            self._speed = multiplier
+        else:
+            self._speed = multiplier
+        
+        if log:
+            logger.info(f"Playback speed set to {multiplier}x")
+    
+    def get_speed(self) -> float:
+        """Get current playback speed."""
+        return self._speed
+    
+    def set_loop_range(self, start_time: UTCDateTime, end_time: UTCDateTime) -> None:
+        """
+        Set loop range.
+        
+        Args:
+            start_time: Loop start timestamp
+            end_time: Loop end timestamp
+        
+        Raises:
+            ValueError: If loop range is less than minimum length
+        """
+        if start_time > end_time:
+            start_time, end_time = end_time, start_time
+
+        loop_length = float(end_time - start_time)
+        if loop_length < MIN_LOOP_LENGTH:
+            raise ValueError(f"Loop range must be at least {MIN_LOOP_LENGTH} seconds")
+        
+        self._loop_start = start_time
+        self._loop_end = end_time
+        if self._loop_enabled:
+            self._snap_playhead_to_loop_if_needed(emit=True)
+        logger.info(f"Loop range set: {start_time} to {end_time}")
+    
+    def enable_loop(self, enabled: bool) -> None:
+        """
+        Enable or disable looping.
+        
+        Args:
+            enabled: True to enable looping
+        """
+        self._loop_enabled = enabled
+        if enabled:
+            self._snap_playhead_to_loop_if_needed(emit=True)
+        logger.info(f"Loop {'enabled' if enabled else 'disabled'}")
+    
+    def get_loop_range(self) -> Optional[Tuple[UTCDateTime, UTCDateTime]]:
+        """
+        Get current loop range.
+        
+        Returns:
+            Tuple of (start_time, end_time) or None if not set
+        """
+        if self._loop_start and self._loop_end:
+            return (self._loop_start, self._loop_end)
+        return None
+    
+    def is_loop_enabled(self) -> bool:
+        """Check if looping is enabled."""
+        return self._loop_enabled
+
+    def clear_loop(self) -> None:
+        """Disable looping and discard loop endpoints (e.g. when loading a session without a loop)."""
+        self._loop_enabled = False
+        self._loop_start = None
+        self._loop_end = None
+        logger.info("Loop range cleared")
+
+    def get_current_timestamp(self) -> Optional[UTCDateTime]:
+        """
+        Get current playhead timestamp.
+        
+        Returns:
+            Current UTC timestamp or None
+        """
+        return self._current_time
+    
+    def seek(self, timestamp: UTCDateTime) -> None:
+        """
+        Seek to a specific timestamp.
+        
+        Args:
+            timestamp: Target UTC timestamp
+        """
+        if self._waveform_model is None:
+            logger.warning("Cannot seek: no waveform model set")
+            return
+        
+        time_range = self._waveform_model.get_time_range()
+        if not time_range:
+            logger.warning("Cannot seek: no time range available")
+            return
+        
+        start_time, end_time = time_range
+        
+        # Clamp timestamp to valid range
+        if timestamp < start_time:
+            timestamp = start_time
+        elif timestamp > end_time:
+            timestamp = end_time
+        
+        # If playing, update playback start position to maintain continuity
+        if self._state == "playing" and self._playback_start_time is not None:
+            from time import time as current_time
+            self._playback_start_position = timestamp
+            self._playback_start_time = current_time()
+        
+        self._current_time = timestamp
+        self.playhead_updated.emit(self._current_time)
+        logger.debug(f"Seeked to {timestamp}")
+    
+    def get_playback_state(self) -> str:
+        """
+        Get current playback state.
+        
+        Returns:
+            "stopped", "playing", or "paused"
+        """
+        return self._state
+
+    def _snap_playhead_to_loop_if_needed(self, emit: bool = False) -> bool:
+        """Move playhead to loop start when looping is on and playhead is outside the band."""
+        if not (self._loop_enabled and self._loop_start and self._loop_end):
+            return False
+        if self._current_time is None:
+            return False
+        if self._loop_start <= self._current_time <= self._loop_end:
+            return False
+
+        self._current_time = self._loop_start
+        if self._state == "playing" and self._playback_start_time is not None:
+            from time import time as current_time
+            self._playback_start_position = self._loop_start
+            self._playback_start_time = current_time()
+        if emit:
+            self.playhead_updated.emit(self._current_time)
+        logger.debug("Playhead snapped to loop start %s", self._loop_start)
+        return True
+    
+    def _update_playhead(self) -> None:
+        """Update playhead position (called by timer)."""
+        if self._waveform_model is None or self._current_time is None:
+            return
+        
+        if self._playback_start_time is None:
+            return
+        
+        from time import time as current_time
+        elapsed = current_time() - self._playback_start_time
+        time_delta = elapsed * self._speed
+        
+        # Calculate new position (add seconds directly to UTCDateTime)
+        new_time = self._playback_start_position + time_delta
+        
+        # Get time range
+        time_range = self._waveform_model.get_time_range()
+        if not time_range:
+            return
+        
+        start_time, end_time = time_range
+        
+        # Clamp new_time to valid range first to prevent issues at high speeds
+        if new_time < start_time:
+            new_time = start_time
+        elif new_time > end_time:
+            new_time = end_time
+        
+        # Handle loop or end of data
+        if self._loop_enabled and self._loop_start and self._loop_end:
+            loop_length_seconds = float(self._loop_end - self._loop_start)
+            if loop_length_seconds <= 0:
+                # Invalid loop range, just use clamped new_time
+                self._current_time = new_time
+            elif new_time > self._loop_end:
+                excess_seconds = float(new_time - self._loop_end)
+                if loop_length_seconds > 0:
+                    wrapped_seconds = excess_seconds % loop_length_seconds
+                    self._current_time = self._loop_start + wrapped_seconds
+                    # Update playback start to maintain continuity
+                    self._playback_start_position = self._current_time
+                    self._playback_start_time = current_time()
+                else:
+                    # Fallback: just reset to start
+                    self._current_time = self._loop_start
+                    self._playback_start_position = self._loop_start
+                    self._playback_start_time = current_time()
+            elif new_time < self._loop_start:
+                # Handle case where we went backwards past loop start (shouldn't happen, but be safe)
+                self._current_time = self._loop_start
+                self._playback_start_position = self._loop_start
+                self._playback_start_time = current_time()
+            else:
+                self._current_time = new_time
+        else:
+            # No loop: clamp to end_time and stop if we've reached the end
+            if new_time >= end_time:
+                # Reached end, stop playback
+                self._current_time = end_time
+                self.stop()
+            else:
+                self._current_time = new_time
+        
+        # Emit signal for UI updates
+        self.playhead_updated.emit(self._current_time)
+

@@ -31,6 +31,7 @@ class SerialObject(InteractiveObject):
         self._serial = None
         self._connection_failed = False
         self._port_opened = False
+        self._rx_buffer = ""
 
     @property
     def communication_type(self) -> str:
@@ -53,6 +54,7 @@ class SerialObject(InteractiveObject):
                 self.baudrate,
             )
             self._port_opened = True
+            self._rx_buffer = ""
             return True
         except Exception as e:
             logger.error("Failed to open Serial connection for %s: %s", self.object_id, e)
@@ -105,6 +107,41 @@ class SerialObject(InteractiveObject):
             logger.error("Failed to send Serial message for %s: %s", self.object_id, e)
             return None
 
+    def read_available_lines(self) -> List[str]:
+        """Non-blocking read of complete lines from the device (e.g. ``DY,BTN,PLAY``)."""
+        if self._serial is None or not self._serial.is_open:
+            return []
+        try:
+            waiting = getattr(self._serial, "in_waiting", 0) or 0
+            if waiting:
+                chunk = self._serial.read(waiting)
+                self._rx_buffer += chunk.decode("utf-8", errors="replace")
+        except Exception as e:
+            logger.error("Failed to read Serial input for %s: %s", self.object_id, e)
+            return []
+
+        lines: List[str] = []
+        while "\n" in self._rx_buffer:
+            raw, self._rx_buffer = self._rx_buffer.split("\n", 1)
+            text = raw.strip()
+            if text:
+                lines.append(text)
+        if len(self._rx_buffer) > 1024:
+            self._rx_buffer = ""
+        return lines
+
+    def send_control_line(self, line: str) -> bool:
+        """Send a firmware control line (e.g. ``DY,PLAY``). Port must already be open."""
+        if self._serial is None or not self._serial.is_open:
+            return False
+        text = line if line.endswith("\n") else line + "\n"
+        try:
+            self._serial.write(text.encode("utf-8"))
+            return True
+        except Exception as e:
+            logger.error("Failed to send Serial control line for %s: %s", self.object_id, e)
+            return False
+
     def close(self) -> None:
         if self._serial is not None:
             try:
@@ -117,6 +154,7 @@ class SerialObject(InteractiveObject):
                 self._serial = None
                 self._connection_failed = False
                 self._port_opened = False
+                self._rx_buffer = ""
 
     def get_config_dict(self) -> dict:
         from core.pin_stream import pin_rows_to_dicts

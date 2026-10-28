@@ -106,7 +106,7 @@ class DataPicker(QWidget):
         self.load_button = QPushButton("Load Data")
         self.load_button.clicked.connect(self._on_load_clicked)
         layout.addWidget(self.load_button)
-        
+
         # Loading indicator
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)

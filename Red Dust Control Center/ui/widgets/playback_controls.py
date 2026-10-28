@@ -117,6 +117,12 @@ class PlaybackControls(QWidget):
         self.value_label = QLabel("--")
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.value_label.setTextFormat(Qt.TextFormat.PlainText)
+        # Live values change width every tick; ignore sizeHint so splitters stay put.
+        value_sp = self.value_label.sizePolicy()
+        value_sp.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        value_sp.setHorizontalStretch(1)
+        self.value_label.setSizePolicy(value_sp)
+        self.value_label.setMinimumWidth(0)
         row1.addWidget(self.value_label, 1)
 
         row1.addStretch()

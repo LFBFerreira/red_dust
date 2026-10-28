@@ -74,6 +74,14 @@ class MainWindowSessionMixin(_MainWindowBase):
         self._sync_theme_menu_checks()
 
         view_menu = menubar.addMenu("View")
+        self._fullscreen_action = QAction("Full Screen", self)
+        self._fullscreen_action.setCheckable(True)
+        self._fullscreen_action.setStatusTip(
+            "Open a full-screen view of dataset information and the loop-region waveform"
+        )
+        self._fullscreen_action.triggered.connect(self._on_fullscreen_menu_toggled)
+        view_menu.addAction(self._fullscreen_action)
+
         self._view_log_action = QAction("View Log", self)
         self._view_log_action.setCheckable(True)
         self._view_log_action.setChecked(read_show_log())
@@ -248,6 +256,7 @@ class MainWindowSessionMixin(_MainWindowBase):
                 app_color_scheme=getattr(
                     self, "_app_color_scheme", read_saved_color_scheme()
                 ),
+                dust_devil=self._dust_devil_state_dict(),
             )
 
             self.session_manager.save_session(file_path, state)
@@ -299,6 +308,8 @@ class MainWindowSessionMixin(_MainWindowBase):
                     self.object_cards,
                     state,
                 )
+
+            self._restore_dust_devil_state(state)
 
             if self.waveform_model.get_stream():
                 self._restore_session_state_after_load(state)

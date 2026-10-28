@@ -42,7 +42,7 @@ Two styles under `Interactive Object/`:
 | Path | Toolchain |
 |------|-----------|
 | `Lilygo/lilygo_shaker/` (and similar `.ino` sketches) | Arduino IDE / ESP32 core — open the `.ino`, edit `settings.h`, Verify/Upload |
-| `Test ESP_RGB/` (PlatformIO) | `pio run` from that folder when PlatformIO is available |
+| `Archive/Test ESP_RGB/` (PlatformIO) | `pio run` from that folder when PlatformIO is available |
 
 Agents should **not** flash boards unless asked. Prefer reading `settings.h` / `platformio.ini` and matching RDCC wire contracts (`SERIAL_BAUDRATE`, pin slots, OSC path/port) over guessing hardware.
 

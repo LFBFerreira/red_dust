@@ -41,6 +41,9 @@ class MainWindowPlaybackMixin(_MainWindowBase):
     def _on_playhead_updated(self, timestamp):
         """Handle playhead position update."""
         self.waveform_viewer.update_playhead(timestamp)
+        win = getattr(self, "_fullscreen_window", None)
+        if win is not None:
+            win.update_playhead(timestamp)
 
         time_range = self.waveform_model.get_time_range()
         if time_range:
@@ -81,6 +84,7 @@ class MainWindowPlaybackMixin(_MainWindowBase):
         self._update_metadata()
         self._update_object_card_channels()
         self._refresh_value_display()
+        self._sync_fullscreen_preview()
 
     def _on_position_slider_changed(self, value: int) -> None:
         """Handle position slider change."""
@@ -145,6 +149,7 @@ class MainWindowPlaybackMixin(_MainWindowBase):
             end_set=end_set,
             loop_enabled=loop_enabled,
         )
+        self._sync_fullscreen_preview()
 
     def _on_loop_markers_changed(self) -> None:
         """Disable looping when start/end inputs no longer form a valid range."""

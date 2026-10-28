@@ -10,11 +10,13 @@ import numpy as np
 import pyqtgraph as pg
 from obspy import Stream, UTCDateTime
 from pyqtgraph import AxisItem
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from settings import MAX_WAVEFORM_PLOT_POINTS_PER_CHANNEL
+
+from ui.layout_helpers import panel_title
 
 from .channel_colors import FALLBACK_TRACE_COLOR, channel_color_map
 
@@ -86,9 +88,12 @@ class WaveformViewer(QWidget):
     """Widget for displaying multi-channel waveform data."""
 
     loop_range_selected = Signal(UTCDateTime, UTCDateTime)
+    fullscreen_requested = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, title: str = "Waveform", interactive: bool = True):
         super().__init__(parent)
+        self._title_text = title
+        self._interactive = interactive
         self._stream = None
         self._visible_channels: tuple[str, ...] = ()
         self._playhead_line = None
@@ -111,15 +116,14 @@ class WaveformViewer(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
-        title = QLabel("<b>Waveform</b>")
-        title.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(title)
+        self._title_label = panel_title(f"<b>{self._title_text}</b>")
+        layout.addWidget(self._title_label)
 
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setLabel("left", "Amplitude")
         self.plot_widget.setLabel("bottom", "Time (UTC)")
         self.plot_widget.showGrid(x=True, y=True)
-        self.plot_widget.setMouseEnabled(x=True, y=True)
+        self.plot_widget.setMouseEnabled(x=self._interactive, y=self._interactive)
 
         class TimeAxisItem(AxisItem):
             def tickStrings(self, values, scale, spacing):
@@ -137,14 +141,24 @@ class WaveformViewer(QWidget):
         )
         self.plot_widget.plotItem.vb.setLimits(xMin=0)
 
-        self.plot_widget.scene().sigMouseClicked.connect(self._on_mouse_click)
-        self.plot_widget.scene().sigMouseMoved.connect(self._on_mouse_move)
+        if self._interactive:
+            self.plot_widget.scene().sigMouseClicked.connect(self._on_mouse_click)
+            self.plot_widget.scene().sigMouseMoved.connect(self._on_mouse_move)
+            self.plot_widget.viewport().installEventFilter(self)
 
         self._drag_start = None
         self._is_dragging = False
+        self._ignore_next_plot_click = False
 
         layout.addWidget(self.plot_widget, 1)
         self.setLayout(layout)
+
+    def set_title(self, title: str) -> None:
+        self._title_text = title
+        self._title_label.setText(f"<b>{title}</b>")
+
+    def set_title_style(self, stylesheet: str) -> None:
+        self._title_label.setStyleSheet(stylesheet)
 
     def _precalculate_channel_data(self, stream: Stream) -> None:
         precalc_start = time.time()
@@ -380,9 +394,47 @@ class WaveformViewer(QWidget):
             len(self._plot_items),
         )
 
+    def update_loop_waveform(
+        self,
+        stream: Stream,
+        visible_channels: Sequence[str],
+        start: UTCDateTime,
+        end: UTCDateTime,
+    ) -> None:
+        """Plot only the loop window (does not cache the full-day stream)."""
+        if start > end:
+            start, end = end, start
+        window = stream.slice(start, end) if stream is not None else None
+        self.update_waveform(window, visible_channels)
+        if window is not None and len(window) > 0:
+            self.set_x_range(start, end)
+
+    def clear_plot(self) -> None:
+        """Remove traces, playhead, and loop overlays."""
+        self._stream = None
+        self._channel_data_cache.clear()
+        self._plot_items.clear()
+        self._playhead_line = None
+        self._loop_region = None
+        self._loop_start_line = None
+        self._loop_end_line = None
+        self.plot_widget.clear()
+
     def update_playhead(self, timestamp: UTCDateTime) -> None:
         if self._playhead_line is not None:
             self._playhead_line.setValue(timestamp.timestamp)
+
+    def set_x_range(self, start: UTCDateTime, end: UTCDateTime) -> None:
+        """Lock the plot X axis to an absolute time window."""
+        t0 = float(start.timestamp)
+        t1 = float(end.timestamp)
+        if t1 < t0:
+            t0, t1 = t1, t0
+        span = t1 - t0
+        margin = span * 0.01 if span > 0 else 1.0
+        vb = self.plot_widget.plotItem.vb
+        vb.setLimits(xMin=t0 - margin, xMax=t1 + margin)
+        vb.setRange(xRange=(t0, t1), padding=0)
 
     def _markers_are_full_duration(self, t0: float, t1: float) -> bool:
         if self._data_x_range is None:
@@ -495,7 +547,31 @@ class WaveformViewer(QWidget):
         else:
             self.clear_loop_markers()
 
+    def _clear_loop_drag(self) -> None:
+        self._is_dragging = False
+        self._drag_start = None
+
+    def eventFilter(self, watched, event) -> bool:
+        # The scene click signal reports the first press, not the double-click.
+        if (
+            self._interactive
+            and watched is self.plot_widget.viewport()
+            and event.type() == QEvent.Type.MouseButtonDblClick
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            self._clear_loop_drag()
+            self._ignore_next_plot_click = True
+            self.fullscreen_requested.emit()
+            return True
+        return super().eventFilter(watched, event)
+
     def _on_mouse_click(self, event):
+        if not self._interactive:
+            return
+        if self._ignore_next_plot_click:
+            self._ignore_next_plot_click = False
+            self._clear_loop_drag()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             pos = self.plot_widget.plotItem.vb.mapSceneToView(event.scenePos())
             if self.plot_widget.plotItem.vb.sceneBoundingRect().contains(
@@ -509,6 +585,9 @@ class WaveformViewer(QWidget):
             pass
 
     def mouseReleaseEvent(self, event):
+        if not self._interactive:
+            super().mouseReleaseEvent(event)
+            return
         if self._is_dragging and self._drag_start is not None:
             pos = self.plot_widget.plotItem.vb.mapSceneToView(event.pos())
             if self._drag_start != pos.x():
@@ -517,6 +596,5 @@ class WaveformViewer(QWidget):
                 if start_time > end_time:
                     start_time, end_time = end_time, start_time
                 self.loop_range_selected.emit(start_time, end_time)
-            self._is_dragging = False
-            self._drag_start = None
+            self._clear_loop_drag()
         super().mouseReleaseEvent(event)
