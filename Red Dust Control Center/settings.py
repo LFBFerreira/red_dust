@@ -46,6 +46,7 @@ SHOW_WIDGET_DEBUG_BORDERS = False
 # Main window layout.
 LEFT_PANEL_WIDTH = 250  # Dataset Information / Data Picker column
 STATIONS_PANEL_WIDTH = 720  # Initial width of the Dust Devil timeline column
+OBJECT_CARDS_MIN_WIDTH = 280  # Narrowest the Interactive Objects column can be
 DEFAULT_WINDOW_WIDTH = 1680
 DEFAULT_WINDOW_HEIGHT = 800
 WIDGET_PANEL_MARGIN = 12  # Empty space around each major UI panel (pixels)

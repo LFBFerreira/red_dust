@@ -42,7 +42,7 @@ from settings import (
 from ui.layout_helpers import panel_title
 from ui.widgets.channel_colors import CHANNEL_TRACE_COLORS
 
-LANE_H = 22
+LANE_H = 18
 # Tall enough for tick marks plus the time labels under them.
 RULER_H = 28
 LABEL_W = 54
@@ -51,7 +51,10 @@ DEFAULT_CLICK_CLIP_SEC = 10.0
 # Comfortable speed-graph height. Extra panel space still goes to this lane;
 # the splitter may shrink it down to SPEED_LANE_MIN_H.
 SPEED_LANE_H = 72
-SPEED_LANE_MIN_H = 24
+# Thin floor so the timeline can sit a little shorter in the splitter.
+SPEED_LANE_MIN_H = 16
+# Band between the pin rows and the speed graph, painted in the gutter color.
+SPEED_LANE_GAP = 10
 SPEED_POINT_R = 5
 SPEED_HIT_PX = 8
 
@@ -59,8 +62,8 @@ _LANE_COLORS = CHANNEL_TRACE_COLORS[:STORY_PIN_COUNT]
 
 
 def _graph_height(pin_count: int, speed_lane_h: int) -> int:
-    """Pin lanes + speed strip + ruler. ``speed_lane_h`` is the floor or preferred size."""
-    return max(1, pin_count) * LANE_H + speed_lane_h + RULER_H
+    """Pin lanes + gap + speed strip + ruler. ``speed_lane_h`` is the floor or preferred size."""
+    return max(1, pin_count) * LANE_H + SPEED_LANE_GAP + speed_lane_h + RULER_H
 
 
 def format_story_time(sec: float) -> str:
@@ -163,20 +166,27 @@ class StoryTimelineCanvas(QWidget):
         grid = QColor(text_color)
         grid.setAlpha(40)
 
-        painter.fillRect(QRectF(0, 0, LABEL_W, self.height()), pal.color(QPalette.ColorRole.Window))
+        # Window, not Base: the band between pin rows and the speed graph
+        # uses this too, so the gap stays visible.
+        gutter = pal.color(QPalette.ColorRole.Window)
+        painter.fillRect(QRectF(0, 0, LABEL_W, self.height()), gutter)
         painter.setPen(QPen(grid, 1))
         painter.drawLine(LABEL_W, 0, LABEL_W, self.height())
 
+        # One fill for every pin row. AlternateBase tinted every other row.
+        lane_bg = pal.color(QPalette.ColorRole.Base)
         for pin in range(self._cues.pin_count):
             y = pin * LANE_H
-            lane_bg = pal.color(QPalette.ColorRole.AlternateBase) if pin % 2 else pal.color(QPalette.ColorRole.Base)
             painter.fillRect(QRectF(LABEL_W, y, track.width(), LANE_H), lane_bg)
             color = QColor(_LANE_COLORS[pin % len(_LANE_COLORS)])
             painter.setPen(color)
             label = PIN_SLOT_LABELS[pin] if pin < len(PIN_SLOT_LABELS) else f"Pin_{pin}"
             painter.drawText(QRectF(4, y, LABEL_W - 8, LANE_H), Qt.AlignmentFlag.AlignVCenter, label.replace("Pin_", "Pin "))
-            painter.setPen(QPen(grid, 1))
-            painter.drawLine(LABEL_W, y + LANE_H, self.width(), y + LANE_H)
+            if pin < self._cues.pin_count - 1:
+                painter.setPen(QPen(grid, 1))
+                painter.drawLine(LABEL_W, y + LANE_H, self.width(), y + LANE_H)
+
+        painter.fillRect(QRectF(0, self._pin_lanes_bottom(), self.width(), SPEED_LANE_GAP), gutter)
 
         for clip in self._cues.clips:
             rect = self._clip_rect(clip, track, duration)
@@ -445,11 +455,15 @@ class StoryTimelineCanvas(QWidget):
     def _y_on_ruler(self, y: float) -> bool:
         return y >= self._ruler_top()
 
+    def _pin_lanes_bottom(self) -> int:
+        """Y where the pin rows end and the gap above the speed graph starts."""
+        return self._cues.pin_count * LANE_H
+
     def _track_rect(self) -> QRectF:
-        return QRectF(LABEL_W, 0, self._plot_width(), self._cues.pin_count * LANE_H)
+        return QRectF(LABEL_W, 0, self._plot_width(), self._pin_lanes_bottom())
 
     def _speed_lane_rect(self) -> QRectF:
-        y = self._cues.pin_count * LANE_H
+        y = self._pin_lanes_bottom() + SPEED_LANE_GAP
         # Leftover height belongs to the speed graph. Forcing SPEED_LANE_H here
         # draws that lane over the ruler once the splitter shrinks the panel.
         height = max(0.0, float(self._ruler_top() - y))
@@ -549,7 +563,7 @@ def _toolbar_button(
     on_click,
     tooltip: str | None = None,
 ) -> QPushButton:
-    """Compact toolbar button; section stretches absorb spare width."""
+    """Compact toolbar button. Spare width sits in the stretches between groups."""
     button = QPushButton(text)
     button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     if tooltip:
@@ -563,15 +577,20 @@ def _pack_toolbar_section(
     alignment: Qt.AlignmentFlag,
     *widgets: QWidget,
 ) -> None:
-    """Equal-width toolbar zone; widgets pack to the given edge or center."""
+    """One toolbar group at its content width.
+
+    Equal stretch zones were narrower than the center cluster, so those
+    controls drew on top of Play and Clear.
+    """
     host = QWidget()
+    host.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
     row = QHBoxLayout(host)
     row.setContentsMargins(0, 0, 0, 0)
     row.setSpacing(6)
     row.setAlignment(alignment)
     for widget in widgets:
         row.addWidget(widget)
-    controls.addWidget(host, 1)
+    controls.addWidget(host, 0)
 
 
 class StoryTimelinePanel(QWidget):
@@ -601,9 +620,10 @@ class StoryTimelinePanel(QWidget):
         self._duration_updating = False
         self._speed_updating = False
         self._speed_anchor_id: Optional[str] = None
-        # Fills the timeline cell; wrap_panel only adds the outer margin.
-        # Height floor comes from the canvas so the splitter above can move.
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        # Ignored width: the toolbar is wider than the column can stay.
+        # A Preferred minimum snaps Dust Devil open on the first drag and
+        # then the object-cards splitter cannot move back.
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         self._setup_ui()
         self._sync_duration_edit()
         self.update_time_display(clock.get_current_sec())
@@ -631,6 +651,7 @@ class StoryTimelinePanel(QWidget):
             self.pause_button,
             self.stop_button,
         )
+        controls.addStretch(1)
 
         self.time_label = QLabel("0:00 / 14:30")
         self.time_label.setMinimumWidth(90)
@@ -666,6 +687,7 @@ class StoryTimelinePanel(QWidget):
             self.duration_edit,
             self.sync_dy_checkbox,
         )
+        controls.addStretch(1)
 
         self.clear_button = _toolbar_button("Clear clips", self._on_clear_clips)
         self.clear_speed_button = _toolbar_button(

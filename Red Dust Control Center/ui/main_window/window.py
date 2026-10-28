@@ -24,8 +24,8 @@ from core.speed_envelope import SpeedEnvelope
 from core.story_clock import StoryClock
 from core.waveform_model import WaveformModel
 from settings import (
-    DEFAULT_WINDOW_HEIGHT,
     LEFT_PANEL_WIDTH,
+    OBJECT_CARDS_MIN_WIDTH,
     STATIONS_PANEL_WIDTH,
     WIDGET_PANEL_MARGIN,
 )
@@ -59,6 +59,17 @@ from .story_mixin import MainWindowStoryMixin
 logger = logging.getLogger(__name__)
 
 
+def _ignore_horizontal_hint(widget: QWidget) -> None:
+    """Let the main column splitter shrink this widget.
+
+    A wide size hint becomes a minimum for the left column. Dragging the
+    object-cards separator wider then cannot move it back.
+    """
+    policy = widget.sizePolicy()
+    policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+    widget.setSizePolicy(policy)
+
+
 class MainWindow(
     QMainWindow,
     # Mixin order matters: objects → playback → story → data → session so shared
@@ -74,7 +85,7 @@ class MainWindow(
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Red Dust Control Center")
-        self.setMinimumSize(1100, DEFAULT_WINDOW_HEIGHT)
+        self.setMinimumWidth(1100)
 
         self.data_manager = DataManager()
         self.waveform_model = WaveformModel()
@@ -95,6 +106,11 @@ class MainWindow(
 
         self._setup_menu_bar()
         self._setup_ui()
+        # Layout minimum, not the 800px startup size. Set after _setup_ui so
+        # playback, the data picker, and the story timeline are included.
+        content_floor = self.minimumSizeHint().height()
+        if content_floor > 0:
+            self.setMinimumHeight(content_floor)
         self._setup_logging()
         self._connect_signals()
         self._restore_window_geometry()
@@ -203,9 +219,11 @@ class MainWindow(
         waveform_stack_layout.setSpacing(WIDGET_PANEL_MARGIN)
         self.waveform_viewer = WaveformViewer()
         set_vertical_policy(self.waveform_viewer, QSizePolicy.Policy.Expanding)
+        _ignore_horizontal_hint(self.waveform_viewer)
         waveform_stack_layout.addWidget(self.waveform_viewer, 1)
         self.playback_controls = PlaybackControls()
         set_vertical_policy(self.playback_controls, QSizePolicy.Policy.Fixed)
+        _ignore_horizontal_hint(self.playback_controls)
         waveform_stack_layout.addWidget(self.playback_controls, 0)
         waveform_column_layout.addWidget(wrap_panel(waveform_stack), 1)
 
@@ -251,7 +269,7 @@ class MainWindow(
                 self.waveform_model.get_all_channels()
             ),
         )
-        self.object_cards.setMinimumWidth(420)
+        self.object_cards.setMinimumWidth(OBJECT_CARDS_MIN_WIDTH)
         cards_sp = self.object_cards.sizePolicy()
         cards_sp.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
         self.object_cards.setSizePolicy(cards_sp)
@@ -306,7 +324,7 @@ class MainWindow(
         total = self._main_column_splitter.width()
         if total <= 0:
             return
-        right = min(STATIONS_PANEL_WIDTH, max(420, total * 2 // 5))
+        right = min(STATIONS_PANEL_WIDTH, max(OBJECT_CARDS_MIN_WIDTH, total * 2 // 5))
         self._main_column_splitter.setSizes([max(1, total - right), right])
         self._main_right_width = right
 
@@ -326,13 +344,19 @@ class MainWindow(
         total = self._main_column_splitter.width()
         if total <= 0:
             return
-        right = min(max(420, right), max(420, total - 1))
+        right = min(max(OBJECT_CARDS_MIN_WIDTH, right), max(OBJECT_CARDS_MIN_WIDTH, total - 1))
         self._main_column_splitter.setSizes([max(1, total - right), right])
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        if self._splits_initialized:
-            self._keep_main_split_right_width()
+        if not self._splits_initialized:
+            return
+        # Dragging the object-cards splitter resizes children, not the window.
+        # Resetting the split here yanked the handle back toward the cursor.
+        old_width = event.oldSize().width()
+        if old_width > 0 and old_width == event.size().width():
+            return
+        self._keep_main_split_right_width()
 
     def _apply_log_visibility(self, visible: bool) -> None:
         """Show or hide the log panel; the timeline fills the left bottom when hidden."""
