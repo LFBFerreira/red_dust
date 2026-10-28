@@ -41,7 +41,7 @@ from settings import (
 from ui.layout_helpers import panel_title
 from ui.widgets.channel_colors import CHANNEL_TRACE_COLORS
 
-LANE_H = 22
+LANE_H = 18
 # Tall enough for tick marks plus the time labels under them.
 RULER_H = 28
 LABEL_W = 54
@@ -50,14 +50,17 @@ DEFAULT_CLICK_CLIP_SEC = 10.0
 # Comfortable speed-graph height. Extra panel space still goes to this lane;
 # the splitter may shrink it down to SPEED_LANE_MIN_H.
 SPEED_LANE_H = 72
-SPEED_LANE_MIN_H = 24
+# Thin floor so each station panel can sit a little shorter in the splitter.
+SPEED_LANE_MIN_H = 16
+# Band between the pin rows and the speed graph, painted in the gutter color.
+SPEED_LANE_GAP = 10
 SPEED_POINT_R = 5
 SPEED_HIT_PX = 8
 
 
 def _graph_height(pin_count: int, speed_lane_h: int) -> int:
-    """Pin lanes + speed strip + ruler. ``speed_lane_h`` is the floor or preferred size."""
-    return max(1, pin_count) * LANE_H + speed_lane_h + RULER_H
+    """Pin lanes + gap + speed strip + ruler. ``speed_lane_h`` is the floor or preferred size."""
+    return max(1, pin_count) * LANE_H + SPEED_LANE_GAP + speed_lane_h + RULER_H
 
 
 def format_story_time(sec: float) -> str:
@@ -175,20 +178,27 @@ class StoryTimelineCanvas(QWidget):
         grid = QColor(text_color)
         grid.setAlpha(40)
 
-        painter.fillRect(QRectF(0, 0, LABEL_W, self.height()), pal.color(QPalette.ColorRole.Window))
+        # Window, not Base: the band between pin rows and the speed graph
+        # uses this too, so the gap stays visible.
+        gutter = pal.color(QPalette.ColorRole.Window)
+        painter.fillRect(QRectF(0, 0, LABEL_W, self.height()), gutter)
         painter.setPen(QPen(grid, 1))
         painter.drawLine(LABEL_W, 0, LABEL_W, self.height())
 
+        # One fill for every pin row. AlternateBase tinted the second row.
+        lane_bg = pal.color(QPalette.ColorRole.Base)
         for pin in range(self._cues.pin_count):
             y = pin * LANE_H
-            lane_bg = pal.color(QPalette.ColorRole.AlternateBase) if pin % 2 else pal.color(QPalette.ColorRole.Base)
             painter.fillRect(QRectF(LABEL_W, y, track.width(), LANE_H), lane_bg)
             color = self._lane_color(pin)
             painter.setPen(color)
             label = self._pin_label(pin).replace("Pin_", "Pin ")
             painter.drawText(QRectF(4, y, LABEL_W - 8, LANE_H), Qt.AlignmentFlag.AlignVCenter, label)
-            painter.setPen(QPen(grid, 1))
-            painter.drawLine(LABEL_W, y + LANE_H, self.width(), y + LANE_H)
+            if pin < self._cues.pin_count - 1:
+                painter.setPen(QPen(grid, 1))
+                painter.drawLine(LABEL_W, y + LANE_H, self.width(), y + LANE_H)
+
+        painter.fillRect(QRectF(0, self._pin_lanes_bottom(), self.width(), SPEED_LANE_GAP), gutter)
 
         for clip in self._cues.clips:
             rect = self._clip_rect(clip, track, duration)
@@ -457,11 +467,15 @@ class StoryTimelineCanvas(QWidget):
     def _y_on_ruler(self, y: float) -> bool:
         return y >= self._ruler_top()
 
+    def _pin_lanes_bottom(self) -> int:
+        """Y where the pin rows end and the gap above the speed graph starts."""
+        return self._cues.pin_count * LANE_H
+
     def _track_rect(self) -> QRectF:
-        return QRectF(LABEL_W, 0, self._plot_width(), self._cues.pin_count * LANE_H)
+        return QRectF(LABEL_W, 0, self._plot_width(), self._pin_lanes_bottom())
 
     def _speed_lane_rect(self) -> QRectF:
-        y = self._cues.pin_count * LANE_H
+        y = self._pin_lanes_bottom() + SPEED_LANE_GAP
         # Leftover height belongs to the speed graph. Forcing SPEED_LANE_H here
         # draws that lane over the ruler once the splitter shrinks the panel.
         height = max(0.0, float(self._ruler_top() - y))

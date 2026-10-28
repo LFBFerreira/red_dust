@@ -24,7 +24,6 @@ from core.speed_envelope import SpeedEnvelope
 from core.story_clock import StoryClock
 from core.waveform_model import WaveformModel
 from settings import (
-    DEFAULT_WINDOW_HEIGHT,
     LEFT_PANEL_WIDTH,
     STATION_COUNT,
     STATION_PIN_LABELS,
@@ -78,7 +77,7 @@ class MainWindow(
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Croissant Control Center")
-        self.setMinimumSize(1100, DEFAULT_WINDOW_HEIGHT)
+        self.setMinimumWidth(1100)
 
         self.data_manager = DataManager()
         self.waveform_model = WaveformModel()
@@ -99,6 +98,11 @@ class MainWindow(
 
         self._setup_menu_bar()
         self._setup_ui()
+        # Layout minimum, not the 800px startup size. Set after _setup_ui so
+        # playback, the data picker, and both station timelines are included.
+        content_floor = self.minimumSizeHint().height()
+        if content_floor > 0:
+            self.setMinimumHeight(content_floor)
         self._setup_logging()
         self._connect_signals()
         self._restore_window_geometry()
